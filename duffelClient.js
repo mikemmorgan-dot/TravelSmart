@@ -91,6 +91,7 @@ async function cashBaseline(p) {
     stops: Math.max(...c.itineraries.map((i) => i.stops)),
     carriers: c.validatingAirlines,
     nonStop: c.itineraries.every((i) => i.stops === 0),
+    itineraries: c.itineraries, // full segment detail: carrier, flight #, depart/arrive times, stops
   };
 }
 

@@ -34,6 +34,7 @@ function legCandidates(options, { balances, valuations, awardTax, cheapestFundin
         program: o.program, points: partyPoints, source: c.source, sourcePts: c.sourcePts,
         via: c.via, taxes, econ: taxes + (c.sourcePts * val) / 100,
         estimated: o.estimated || false, seats: o.seats, direct: o.direct, covered: f.seatsAeroCovered,
+        airlines: o.airlines || [],
       });
     }
   }
