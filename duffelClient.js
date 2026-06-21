@@ -15,7 +15,7 @@ const VERSION = "v2";
 function token() {
   const t = process.env.DUFFEL_TOKEN;
   if (!t) throw new Error("Set DUFFEL_TOKEN in your environment (do not hardcode it).");
-  return t;
+  return t.trim(); // strip stray whitespace/newlines from env paste
 }
 
 function passengers(adults = 2, children = 0, childAge = 8) {
