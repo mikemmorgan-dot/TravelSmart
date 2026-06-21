@@ -57,6 +57,7 @@ const server = http.createServer((req, res) => {
         const result = await optimizeTrip(cfg, deps);
         send(res, 200, result);
       } catch (e) {
+        console.error("OPTIMIZE ERROR:", e.stack || e.message);
         send(res, 500, { error: e.message });
       }
     });
