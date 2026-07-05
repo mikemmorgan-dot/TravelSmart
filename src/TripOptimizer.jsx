@@ -42,13 +42,35 @@ export default function TripOptimizer(){
     {program:"RBC Avion", amount:80000, value:1.5},
     {program:"BA Avios", amount:30000, value:1.7},
   ]);
-  const [state,setState]=useState({status:"idle", data:null, sample:false, err:null});
+  const [mode,setMode]=useState("cash"); // "cash" = all flights, cash price · "optimize" = points engine
+  const [state,setState]=useState({status:"idle", kind:null, data:null, sample:false, err:null});
 
   const upd=(k,v)=>setForm(f=>({...f,[k]:v}));
   const updBal=(i,k,v)=>setBalances(b=>b.map((x,j)=>j===i?{...x,[k]:v}:x));
 
+  // Pull the server's actual error message out of a failed response, not just the status code.
+  async function errText(res){
+    try{ const j=await res.json(); return `engine ${res.status}${j.error?` — ${j.error}`:""}`; }
+    catch{ return `engine ${res.status}`; }
+  }
+
+  async function runCash(){
+    setState({status:"loading", kind:"flights", data:null, sample:false, err:null});
+    const body={ origin:form.origin, destination:form.destination,
+      departureDate:form.depart, returnDate:form.return,
+      adults:Number(form.adults), children:Number(form.children), travelClass:form.cabin };
+    try{
+      const res=await fetch(`${API_BASE}/flights`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      if(!res.ok) throw new Error(await errText(res));
+      setState({status:"done", kind:"flights", data:await res.json(), sample:false, err:null});
+    }catch(e){
+      setState({status:"done", kind:"flights", data:null, sample:false, err:e.message});
+    }
+  }
+
   async function run(){
-    setState({status:"loading", data:null, sample:false, err:null});
+    if(mode==="cash") return runCash();
+    setState({status:"loading", kind:"optimize", data:null, sample:false, err:null});
     const cfg={ origin:form.origin, destination:form.destination,
       target:{depart:form.depart, return:form.return}, flexDays:Number(form.flexDays),
       party:{adults:Number(form.adults), children:Number(form.children)}, cabin:form.cabin,
@@ -59,10 +81,10 @@ export default function TripOptimizer(){
       asOf:new Date().toISOString().slice(0,10) };
     try{
       const res=await fetch(`${API_BASE}/optimize`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(cfg)});
-      if(!res.ok) throw new Error("engine "+res.status);
-      setState({status:"done", data:await res.json(), sample:false, err:null});
+      if(!res.ok) throw new Error(await errText(res));
+      setState({status:"done", kind:"optimize", data:await res.json(), sample:false, err:null});
     }catch(e){
-      setState({status:"done", data:SAMPLE, sample:true, err:e.message});
+      setState({status:"done", kind:"optimize", data:SAMPLE, sample:true, err:e.message});
     }
   }
 
@@ -78,6 +100,19 @@ export default function TripOptimizer(){
           </h1>
         </div>
 
+        {/* mode toggle */}
+        <div style={{display:"flex",gap:8,marginTop:18}}>
+          {[["cash","Cash flights"],["optimize","Points optimizer"]].map(([k,label])=>(
+            <button key={k} onClick={()=>setMode(k)}
+              style={{fontFamily:mono,fontSize:11,letterSpacing:"0.08em",textTransform:"uppercase",
+                padding:"7px 14px",borderRadius:6,cursor:"pointer",fontWeight:700,
+                border:`1px solid ${mode===k?PRIMARY:HAIR}`,
+                background:mode===k?PRIMARY:SURFACE,color:mode===k?"#fff":MUTED}}>
+              {label}
+            </button>
+          ))}
+        </div>
+
         {/* form */}
         <div style={{display:"flex",flexWrap:"wrap",gap:16,margin:"20px 0"}}>
           <Panel title="Trip">
@@ -86,10 +121,17 @@ export default function TripOptimizer(){
               <Field label="Cabin"><Sel v={form.cabin} on={v=>upd("cabin",v)} opts={["economy","business"]}/></Field></Row>
             <Row><Field label="Depart"><In type="date" v={form.depart} on={v=>upd("depart",v)} w={140}/></Field>
               <Field label="Return"><In type="date" v={form.return} on={v=>upd("return",v)} w={140}/></Field></Row>
-            <Row><Field label="Flex ±days"><Sel v={form.flexDays} on={v=>upd("flexDays",v)} opts={["0","1","2","3"]}/></Field>
+            <Row>{mode==="optimize" && <Field label="Flex ±days"><Sel v={form.flexDays} on={v=>upd("flexDays",v)} opts={["0","1","2","3"]}/></Field>}
               <Field label="Adults"><In type="number" v={form.adults} on={v=>upd("adults",v)} w={56}/></Field>
               <Field label="Children"><In type="number" v={form.children} on={v=>upd("children",v)} w={56}/></Field></Row>
+            {mode==="cash" && (
+              <button onClick={run} style={{marginTop:10,width:"100%",background:PRIMARY,color:"#fff",border:"none",
+                borderRadius:6,padding:"11px 0",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:sans}}>
+                {state.status==="loading"?"Searching…":"Show all flights"}
+              </button>
+            )}
           </Panel>
+          {mode==="optimize" && (
           <Panel title="Your balances" sub="program · points · ¢/pt">
             {balances.map((b,i)=>(
               <Row key={i}>
@@ -103,6 +145,7 @@ export default function TripOptimizer(){
               {state.status==="loading"?"Searching…":"Find cheapest"}
             </button>
           </Panel>
+          )}
         </div>
 
         {state.sample && (
@@ -110,10 +153,91 @@ export default function TripOptimizer(){
             Showing SAMPLE output — couldn't reach the engine at {API_BASE} ({state.err}). Run server.js locally or point API_BASE at your deploy.
           </Banner>
         )}
+        {state.kind==="flights" && state.err && (
+          <Banner color="#B42318" bg="#FEF0EF" bd="#F3C4C0">
+            Flight search failed ({state.err}). Check DUFFEL_TOKEN on the server.
+          </Banner>
+        )}
 
-        {state.data && <Results r={state.data}/>}
+        {state.kind==="flights" && state.data && <FlightList r={state.data} form={form}/>}
+        {state.kind==="optimize" && state.data && <Results r={state.data}/>}
         {state.status==="idle" && <Empty/>}
       </div>
+    </div>
+  );
+}
+
+// ---- Cash mode: render every offer the engine returned, cheapest first ----
+const hhmm=(iso)=>iso?iso.slice(11,16):"—";
+const dur=(d)=>{ if(!d) return ""; const m=d.match(/PT(?:(\d+)H)?(?:(\d+)M)?/); if(!m) return d;
+  return `${m[1]?m[1]+"h ":""}${m[2]?m[2]+"m":""}`.trim(); };
+const AIRLINES={AC:"Air Canada",WS:"WestJet",TS:"Air Transat",PD:"Porter",UA:"United",AA:"American",DL:"Delta",B6:"JetBlue",F8:"Flair",WG:"Sunwing",ZX:"Duffel Airways"};
+const airline=(c)=>AIRLINES[c]||c||"—";
+
+function Slice({s,label}){
+  const segs=s.segments||[];
+  const first=segs[0]||{}, last=segs[segs.length-1]||{};
+  return (
+    <div style={{flex:1,minWidth:230}}>
+      <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>{label}</div>
+      <div style={{fontWeight:700,fontSize:15,marginTop:3}}>
+        {hhmm(first.depart)} {first.from} → {hhmm(last.arrive)} {last.to}
+      </div>
+      <div style={{fontFamily:mono,fontSize:11.5,color:MUTED,marginTop:2}}>
+        {dur(s.duration)} · {s.stops===0?"nonstop":`${s.stops} stop${s.stops>1?"s":""}`} · {segs.map(g=>`${g.carrier}${g.number||""}`).join(" · ")}
+      </div>
+      {s.stops>0 && (
+        <div style={{fontFamily:mono,fontSize:10.5,color:MUTED,marginTop:1}}>
+          via {segs.slice(0,-1).map(g=>g.to).join(", ")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FlightList({r,form}){
+  const offers=r.offers||[];
+  const pax=(Number(form.adults)||0)+(Number(form.children)||0)||1;
+  const age=r._cacheAgeMs>60000?`cached ${Math.round(r._cacheAgeMs/60000)} min ago`:"live";
+  if(!offers.length) return (
+    <Banner color={BEST} bg="#FBF3E7" bd="#EAD9BD">
+      No offers returned{r.note?` — ${r.note}`:""}. ULCCs (e.g. Flair) aren't in the feed — check them directly.
+    </Banner>
+  );
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",flexWrap:"wrap",gap:8,margin:"4px 0 12px"}}>
+        <h2 style={{fontSize:12,fontFamily:mono,letterSpacing:"0.14em",textTransform:"uppercase",color:MUTED,margin:0}}>
+          {offers.length} option{offers.length!==1?"s":""} · {form.origin} ⇄ {form.destination} · total for {pax} traveller{pax>1?"s":""}
+        </h2>
+        <span style={{fontFamily:mono,fontSize:10,color:MUTED}}>{age} · {r.currency}</span>
+      </div>
+      {offers.map((o,i)=>(
+        <div key={i} style={{background:SURFACE,border:`1px solid ${i===0?BEST:HAIR}`,
+          borderLeft:`4px solid ${i===0?BEST:HAIR}`,borderRadius:10,padding:"14px 16px",marginBottom:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
+                {i===0 && <span style={{fontFamily:mono,fontSize:9,letterSpacing:"0.1em",color:"#fff",background:BEST,padding:"2px 6px",borderRadius:3}}>CHEAPEST</span>}
+                <span style={{fontWeight:800,fontSize:15}}>{airline(o.validatingAirlines?.[0])}</span>
+                {o.cabin && <span style={{fontFamily:mono,fontSize:10,color:MUTED}}>{o.cabin.replace("_"," ")}</span>}
+              </div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:16,marginTop:10}}>
+                {(o.itineraries||[]).map((s,j)=>(
+                  <Slice key={j} s={s} label={j===0?"Outbound":"Return"}/>
+                ))}
+              </div>
+            </div>
+            <div style={{textAlign:"right",alignSelf:"center"}}>
+              <div style={{fontFamily:mono,fontSize:24,fontWeight:800,color:i===0?POS:INK}}>{cad(o.price)}</div>
+              <div style={{fontFamily:mono,fontSize:11,color:MUTED}}>{cad(o.price/pax)}/person · taxes {cad(o.taxes)}</div>
+            </div>
+          </div>
+        </div>
+      ))}
+      <p style={{color:MUTED,fontSize:12,marginTop:12,lineHeight:1.6}}>
+        Prices are all-in for the whole party from the Duffel feed. ULCCs like Flair aren't included — worth a direct check before booking.
+      </p>
     </div>
   );
 }
