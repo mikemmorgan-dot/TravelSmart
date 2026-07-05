@@ -8,7 +8,7 @@ const { Cache, wrap, TTL } = require("./cache");
 const { search } = require("./seatsAeroClient");
 // Cash provider is swappable: CASH_PROVIDER=amadeus falls back to Amadeus while it lasts;
 // default is Duffel (Amadeus self-service is decommissioned 2026-07-17).
-const { cashBaseline } = require(
+const { cashBaseline, searchOffers } = require(
   process.env.CASH_PROVIDER === "amadeus" ? "./amadeusClient" : "./duffelClient"
 );
 
@@ -27,6 +27,13 @@ const awardsCached = wrap(
   (o, d, s, e, sources, cabins) => search({ origin: o, destination: d, start: s, end: e, sources, cabins }).then((r) => r.options),
   { cache, ttlMs: TTL.awards, label: "awards",
     keyFn: (o, d, s, e, src, cab) => `${o}${d}${s}${e}${(src || []).join(",")}${(cab || []).join(",")}` }
+);
+
+// Full offer list (cash mode) — same cache tier as cash baselines.
+const flightsCached = wrap(
+  (p) => searchOffers(p),
+  { cache, ttlMs: TTL.cash, label: "flights",
+    keyFn: (p) => `${p.origin}${p.destination}${p.departureDate}${p.returnDate || ""}${p.travelClass}${p.adults}-${p.children || 0}` }
 );
 
 const deps = {
@@ -58,6 +65,29 @@ const server = http.createServer((req, res) => {
         send(res, 200, result);
       } catch (e) {
         console.error("OPTIMIZE ERROR:", e.stack || e.message);
+        send(res, 500, { error: e.message });
+      }
+    });
+    return;
+  }
+  // Cash mode: every available offer with its all-in party price. No points logic.
+  if (req.method === "POST" && req.url === "/flights") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", async () => {
+      try {
+        const p = JSON.parse(body || "{}");
+        for (const k of ["origin", "destination", "departureDate"])
+          if (!p[k]) throw new Error(`missing ${k}`);
+        const r = await flightsCached({
+          origin: p.origin, destination: p.destination,
+          departureDate: p.departureDate, returnDate: p.returnDate,
+          adults: p.adults ?? 2, children: p.children ?? 0,
+          travelClass: p.travelClass || "economy",
+        });
+        send(res, 200, { ...r.value, _cacheAgeMs: r.cache.ageMs, _fresh: !r.cache.hit });
+      } catch (e) {
+        console.error("FLIGHTS ERROR:", e.stack || e.message);
         send(res, 500, { error: e.message });
       }
     });
