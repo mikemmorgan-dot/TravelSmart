@@ -258,7 +258,7 @@ function FlightList({r,form}){
               </div>
             </div>
           </div>
-          {open===i && <OfferDetail o={o}/>}
+          {open===i && <OfferDetail o={o} form={form}/>}
         </div>
       ))}
       <p style={{color:MUTED,fontSize:12,marginTop:12,lineHeight:1.6}}>
@@ -276,7 +276,9 @@ const layover=(a,b)=>{ // arrive ISO of prev seg, depart ISO of next seg → "1h
   return `${Math.floor(m/60)}h ${String(m%60).padStart(2,"0")}m`;
 };
 
-function OfferDetail({o}){
+function OfferDetail({o,form}){
+  const gfq=`Flights from ${form.origin} to ${form.destination} on ${form.depart}${form.return?` through ${form.return}`:""}`;
+  const gfUrl=`https://www.google.com/travel/flights?q=${encodeURIComponent(gfq)}`;
   const conds=[
     o.conditions?.change && {label:"Changes", c:o.conditions.change},
     o.conditions?.refund && {label:"Refund", c:o.conditions.refund},
@@ -317,6 +319,11 @@ function OfferDetail({o}){
         ))}
         {o.ownerName && <span>sold by {o.ownerName}</span>}
       </div>
+      <a href={gfUrl} target="_blank" rel="noopener noreferrer"
+        style={{display:"inline-block",marginTop:10,fontFamily:mono,fontSize:11,fontWeight:700,letterSpacing:"0.06em",
+          color:PRIMARY,border:`1px solid ${PRIMARY}`,borderRadius:6,padding:"6px 12px",textDecoration:"none"}}>
+        Check on Google Flights ↗
+      </a>
       <div style={{fontFamily:mono,fontSize:10,color:MUTED,marginTop:8}}>
         Fare rules come from the airline via Duffel — confirm on the airline's site before booking.
       </div>
