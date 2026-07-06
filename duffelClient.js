@@ -33,6 +33,10 @@ function offerCabin(o) {
 function normalizeOffer(o) {
   const price = Number(o.total_amount);
   const base = Number(o.base_amount || 0);
+  // Baggage allowance off the first segment's first passenger (Duffel repeats it per segment).
+  const bags = o.slices?.[0]?.segments?.[0]?.passengers?.[0]?.baggages || [];
+  const bag = (t) => bags.filter((b) => b.type === t).reduce((n, b) => n + (b.quantity || 0), 0);
+  const cond = (c) => (c ? { allowed: c.allowed, penalty: c.penalty_amount ? Number(c.penalty_amount) : null } : null);
   return {
     price,                                   // all-in, whole party, all slices
     currency: o.total_currency,
@@ -40,14 +44,26 @@ function normalizeOffer(o) {
     taxes: Number(o.tax_amount || +(price - base).toFixed(2)),
     cabin: offerCabin(o),
     validatingAirlines: o.owner?.iata_code ? [o.owner.iata_code] : [],
+    ownerName: o.owner?.name || null,
+    baggage: { carryOn: bag("carry_on"), checked: bag("checked") },
+    conditions: {
+      change: cond(o.conditions?.change_before_departure),
+      refund: cond(o.conditions?.refund_before_departure),
+    },
     itineraries: (o.slices || []).map((s) => ({
       duration: s.duration,
+      fareBrand: s.fare_brand_name || null,
       stops: Math.max(0, (s.segments?.length || 1) - 1),
       segments: (s.segments || []).map((seg) => ({
         from: seg.origin?.iata_code, depart: seg.departing_at,
         to: seg.destination?.iata_code, arrive: seg.arriving_at,
         carrier: seg.operating_carrier?.iata_code,
         number: seg.operating_carrier_flight_number,
+        carrierName: seg.operating_carrier?.name || null,
+        marketing: seg.marketing_carrier?.iata_code || null,
+        marketingNumber: seg.marketing_carrier_flight_number || null,
+        aircraft: seg.aircraft?.name || null,
+        duration: seg.duration || null,
       })),
     })),
   };
