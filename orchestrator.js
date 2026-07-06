@@ -72,9 +72,11 @@ async function optimizeTrip(cfg, deps) {
   const ret_dates = genDates(target.return, flexDays);
   const lo = (a) => a[0], hi = (a) => a[a.length - 1];
 
-  // ONE award call per direction across the whole window (Seats.aero returns all dates in range).
-  const outAll = await getAwards(origin, destination, lo(deps_dates), hi(deps_dates), sources, [cabin]);
-  const retAll = await getAwards(destination, origin, lo(ret_dates), hi(ret_dates), sources, [cabin]);
+  // ONE award call per direction across the whole window (Seats.aero returns all dates in range) — in parallel.
+  const [outAll, retAll] = await Promise.all([
+    getAwards(origin, destination, lo(deps_dates), hi(deps_dates), sources, [cabin]),
+    getAwards(destination, origin, lo(ret_dates), hi(ret_dates), sources, [cabin]),
+  ]);
 
   // Inject the Avios fallback Seats.aero is blind to — but ONLY where Avios is actually viable
   // (a oneworld nonstop or sane connection exists). For routes like YYZ-MCO it isn't, so skip it.
@@ -91,30 +93,44 @@ async function optimizeTrip(cfg, deps) {
   const outboundByDate = groupByDate(withAvios(outAll, deps_dates));
   const returnByDate = groupByDate(withAvios(retAll, ret_dates));
 
-  const grid = [];
-  let cashCalls = 0;
-  for (const dep of deps_dates) {
-    for (const ret of ret_dates) {
-      if (ret < dep) continue;
-      const cash = await getCash(origin, destination, dep, ret, cabin, party); cashCalls++;
-      const outC = legCandidates(outboundByDate[dep] || [], { balances, valuations, awardTax, cheapestFunding, asOf, pax });
-      const inC = legCandidates(returnByDate[ret] || [], { balances, valuations, awardTax, cheapestFunding, asOf, pax });
-      const sol = solveRoundTrip(outC, inC, balances);
+  // Cash sweep: one call per date pair. Serially this is 25 × ~5-15s and blows past
+  // browser (~60s) and proxy (~100s) timeouts — so run with bounded concurrency instead.
+  const pairs = [];
+  for (const dep of deps_dates) for (const ret of ret_dates) if (ret >= dep) pairs.push({ dep, ret });
 
-      let award = null;
-      if (sol) {
-        const totalPts = sol.outLeg.sourcePts + sol.inLeg.sourcePts;
-        const oop = sol.outLeg.taxes + sol.inLeg.taxes;
-        const valueCaptured = (cash.price - (cash.taxes ?? 0)) - oop;
-        award = { econ: sol.econ, outLeg: sol.outLeg, inLeg: sol.inLeg, totalPts,
-          outOfPocket: oop, draws: sol.draws,
-          cppCaptured: totalPts ? (valueCaptured / totalPts) * 100 : 0 };
-      }
-      const cashEcon = cash.price;
-      const winner = award && award.econ < cashEcon ? "award" : "cash";
-      grid.push({ dep, ret, cash, award, winner, bestEcon: Math.min(cashEcon, award ? award.econ : Infinity) });
+  const CONCURRENCY = 8;
+  const cashResults = new Array(pairs.length);
+  let next = 0;
+  async function worker() {
+    while (next < pairs.length) {
+      const i = next++;
+      const { dep, ret } = pairs[i];
+      cashResults[i] = await getCash(origin, destination, dep, ret, cabin, party);
     }
   }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pairs.length) }, worker));
+  const cashCalls = pairs.length;
+
+  const grid = [];
+  pairs.forEach(({ dep, ret }, i) => {
+    const cash = cashResults[i];
+    const outC = legCandidates(outboundByDate[dep] || [], { balances, valuations, awardTax, cheapestFunding, asOf, pax });
+    const inC = legCandidates(returnByDate[ret] || [], { balances, valuations, awardTax, cheapestFunding, asOf, pax });
+    const sol = solveRoundTrip(outC, inC, balances);
+
+    let award = null;
+    if (sol) {
+      const totalPts = sol.outLeg.sourcePts + sol.inLeg.sourcePts;
+      const oop = sol.outLeg.taxes + sol.inLeg.taxes;
+      const valueCaptured = (cash.price - (cash.taxes ?? 0)) - oop;
+      award = { econ: sol.econ, outLeg: sol.outLeg, inLeg: sol.inLeg, totalPts,
+        outOfPocket: oop, draws: sol.draws,
+        cppCaptured: totalPts ? (valueCaptured / totalPts) * 100 : 0 };
+    }
+    const cashEcon = cash.price;
+    const winner = award && award.econ < cashEcon ? "award" : "cash";
+    grid.push({ dep, ret, cash, award, winner, bestEcon: Math.min(cashEcon, award ? award.econ : Infinity) });
+  });
 
   grid.sort((a, b) => a.bestEcon - b.bestEcon);
   return { best: grid[0], grid, cashCalls, aviosNote: avios.note };
