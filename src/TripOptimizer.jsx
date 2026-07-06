@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 
 /* TripOptimizer — front-end over the orchestrator engine (server.js / POST /optimize).
    In this preview it can't reach your localhost backend, so it shows a labelled SAMPLE.
@@ -33,9 +33,26 @@ function buildSampleGrid(){
   })); return g;
 }
 
+const FORM_KEY="travelsmart_search_v1";
+const FORM_DEFAULTS={ origin:"YYZ", destination:"MCO", depart:"2026-08-04", return:"2026-08-14",
+  flexDays:2, cabin:"economy", adults:2, children:2 };
+
+function loadForm(){
+  try{
+    const saved=JSON.parse(localStorage.getItem(FORM_KEY));
+    if(!saved || typeof saved!=="object") return FORM_DEFAULTS;
+    const f={...FORM_DEFAULTS, ...saved};
+    // Stale-date guard: never pre-fill a departure in the past.
+    const today=new Date().toISOString().slice(0,10);
+    if(f.depart<today){ f.depart=FORM_DEFAULTS.depart>today?FORM_DEFAULTS.depart:today; f.return=""; }
+    if(f.return && f.return<f.depart) f.return=f.depart;
+    return f;
+  }catch{ return FORM_DEFAULTS; }
+}
+
 export default function TripOptimizer(){
-  const [form,setForm]=useState({ origin:"YYZ", destination:"MCO", depart:"2026-08-04", return:"2026-08-14",
-    flexDays:2, cabin:"economy", adults:2, children:2 });
+  const [form,setForm]=useState(loadForm);
+  useEffect(()=>{ try{ localStorage.setItem(FORM_KEY, JSON.stringify(form)); }catch{} },[form]);
   const [balances,setBalances]=useState([
     {program:"Amex MR (CA)", amount:95000, value:1.7},
     {program:"Aeroplan", amount:42000, value:1.5},
@@ -171,7 +188,7 @@ export default function TripOptimizer(){
 const hhmm=(iso)=>iso?iso.slice(11,16):"—";
 const dur=(d)=>{ if(!d) return ""; const m=d.match(/PT(?:(\d+)H)?(?:(\d+)M)?/); if(!m) return d;
   return `${m[1]?m[1]+"h ":""}${m[2]?m[2]+"m":""}`.trim(); };
-const AIRLINES={AC:"Air Canada",WS:"WestJet",TS:"Air Transat",PD:"Porter",UA:"United",AA:"American",DL:"Delta",B6:"JetBlue",F8:"Flair",WG:"Sunwing",ZX:"Duffel Airways"};
+const AIRLINES={AC:"Air Canada",WS:"WestJet",TS:"Air Transat",PD:"Porter",UA:"United",AA:"American",DL:"Delta",B6:"JetBlue",F8:"Flair",WG:"Sunwing",ZZ:"Duffel Airways (test)",ZX:"Duffel Airways (test)"};
 const airline=(c)=>AIRLINES[c]||c||"—";
 
 function Slice({s,label}){
@@ -215,8 +232,8 @@ function FlightList({r,form}){
       {offers.map((o,i)=>(
         <div key={i} style={{background:SURFACE,border:`1px solid ${i===0?BEST:HAIR}`,
           borderLeft:`4px solid ${i===0?BEST:HAIR}`,borderRadius:10,padding:"14px 16px",marginBottom:10}}>
-          <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
-            <div style={{flex:1,minWidth:0}}>
+          <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:12,alignItems:"flex-start"}}>
+            <div style={{flex:"1 1 240px",minWidth:240}}>
               <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
                 {i===0 && <span style={{fontFamily:mono,fontSize:9,letterSpacing:"0.1em",color:"#fff",background:BEST,padding:"2px 6px",borderRadius:3}}>CHEAPEST</span>}
                 <span style={{fontWeight:800,fontSize:15}}>{airline(o.validatingAirlines?.[0])}</span>
@@ -228,9 +245,9 @@ function FlightList({r,form}){
                 ))}
               </div>
             </div>
-            <div style={{textAlign:"right",alignSelf:"center"}}>
+            <div style={{textAlign:"right",flexShrink:0,marginLeft:"auto"}}>
               <div style={{fontFamily:mono,fontSize:24,fontWeight:800,color:i===0?POS:INK}}>{cad(o.price)}</div>
-              <div style={{fontFamily:mono,fontSize:11,color:MUTED}}>{cad(o.price/pax)}/person · taxes {cad(o.taxes)}</div>
+              <div style={{fontFamily:mono,fontSize:11,color:MUTED,whiteSpace:"nowrap"}}>{cad(o.price/pax)}/person · taxes {cad(o.taxes)}</div>
             </div>
           </div>
         </div>
