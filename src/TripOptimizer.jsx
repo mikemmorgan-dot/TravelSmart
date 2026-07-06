@@ -216,6 +216,8 @@ function FlightList({r,form}){
   const offers=r.offers||[];
   const pax=(Number(form.adults)||0)+(Number(form.children)||0)||1;
   const age=r._cacheAgeMs>60000?`cached ${Math.round(r._cacheAgeMs/60000)} min ago`:"live";
+  const [open,setOpen]=useState(null); // index of expanded card
+  const toggle=(i)=>setOpen(o=>o===i?null:i);
   if(!offers.length) return (
     <Banner color={BEST} bg="#FBF3E7" bd="#EAD9BD">
       No offers returned{r.note?` — ${r.note}`:""}. ULCCs (e.g. Flair) aren't in the feed — check them directly.
@@ -230,7 +232,10 @@ function FlightList({r,form}){
         <span style={{fontFamily:mono,fontSize:10,color:MUTED}}>{age} · {r.currency}</span>
       </div>
       {offers.map((o,i)=>(
-        <div key={i} style={{background:SURFACE,border:`1px solid ${i===0?BEST:HAIR}`,
+        <div key={i} role="button" tabIndex={0} aria-expanded={open===i}
+          onClick={()=>toggle(i)}
+          onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); toggle(i); } }}
+          style={{background:SURFACE,border:`1px solid ${i===0?BEST:HAIR}`,cursor:"pointer",
           borderLeft:`4px solid ${i===0?BEST:HAIR}`,borderRadius:10,padding:"14px 16px",marginBottom:10}}>
           <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:12,alignItems:"flex-start"}}>
             <div style={{flex:"1 1 240px",minWidth:240}}>
@@ -248,13 +253,73 @@ function FlightList({r,form}){
             <div style={{textAlign:"right",flexShrink:0,marginLeft:"auto"}}>
               <div style={{fontFamily:mono,fontSize:24,fontWeight:800,color:i===0?POS:INK}}>{cad(o.price)}</div>
               <div style={{fontFamily:mono,fontSize:11,color:MUTED,whiteSpace:"nowrap"}}>{cad(o.price/pax)}/person · taxes {cad(o.taxes)}</div>
+              <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,marginTop:4,textTransform:"uppercase"}}>
+                {open===i?"▴ hide details":"▾ details"}
+              </div>
             </div>
           </div>
+          {open===i && <OfferDetail o={o}/>}
         </div>
       ))}
       <p style={{color:MUTED,fontSize:12,marginTop:12,lineHeight:1.6}}>
         Prices are all-in for the whole party from the Duffel feed. ULCCs like Flair aren't included — worth a direct check before booking.
       </p>
+    </div>
+  );
+}
+
+// ---- Expanded detail panel: segment-by-segment with layovers, baggage, fare rules ----
+const layover=(a,b)=>{ // arrive ISO of prev seg, depart ISO of next seg → "1h 46m"
+  if(!a||!b) return null;
+  const m=Math.round((new Date(b)-new Date(a))/60000);
+  if(!(m>0)) return null;
+  return `${Math.floor(m/60)}h ${String(m%60).padStart(2,"0")}m`;
+};
+
+function OfferDetail({o}){
+  const conds=[
+    o.conditions?.change && {label:"Changes", c:o.conditions.change},
+    o.conditions?.refund && {label:"Refund", c:o.conditions.refund},
+  ].filter(Boolean);
+  return (
+    <div onClick={e=>e.stopPropagation()} style={{borderTop:`1px solid ${HAIR}`,marginTop:12,paddingTop:12,cursor:"default"}}>
+      {(o.itineraries||[]).map((s,j)=>(
+        <div key={j} style={{marginBottom:12}}>
+          <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>
+            {j===0?"Outbound":"Return"}{s.fareBrand?` · ${s.fareBrand}`:""}
+          </div>
+          {(s.segments||[]).map((g,k)=>(
+            <React.Fragment key={k}>
+              {k>0 && (
+                <div style={{fontFamily:mono,fontSize:10.5,color:BEST,margin:"4px 0 4px 10px"}}>
+                  ⟳ {layover(s.segments[k-1].arrive,g.depart)||"—"} layover in {g.from}
+                </div>
+              )}
+              <div style={{display:"flex",flexWrap:"wrap",gap:"4px 14px",alignItems:"baseline",marginTop:4}}>
+                <span style={{fontFamily:mono,fontSize:12,fontWeight:700,minWidth:118}}>
+                  {hhmm(g.depart)} {g.from} → {hhmm(g.arrive)} {g.to}
+                </span>
+                <span style={{fontFamily:mono,fontSize:11,color:MUTED}}>
+                  {(g.marketing||g.carrier)||""}{g.marketingNumber||g.number||""}
+                  {g.carrierName?` · ${g.carrierName}`:""}
+                  {g.aircraft?` · ${g.aircraft}`:""}
+                  {g.duration?` · ${dur(g.duration)}`:""}
+                </span>
+              </div>
+            </React.Fragment>
+          ))}
+        </div>
+      ))}
+      <div style={{display:"flex",flexWrap:"wrap",gap:"4px 18px",fontFamily:mono,fontSize:11,color:MUTED}}>
+        <span>bags: {o.baggage?.carryOn??0} carry-on · {o.baggage?.checked??0} checked <span style={{fontSize:9}}>(per person)</span></span>
+        {conds.map(({label,c},k)=>(
+          <span key={k}>{label}: {c.allowed?(c.penalty!=null?`fee ${cad(c.penalty)}`:"allowed"):"not allowed"}</span>
+        ))}
+        {o.ownerName && <span>sold by {o.ownerName}</span>}
+      </div>
+      <div style={{fontFamily:mono,fontSize:10,color:MUTED,marginTop:8}}>
+        Fare rules come from the airline via Duffel — confirm on the airline's site before booking.
+      </div>
     </div>
   );
 }
