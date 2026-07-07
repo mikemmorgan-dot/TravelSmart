@@ -247,9 +247,17 @@ const dur=(d)=>{ if(!d) return ""; const m=d.match(/PT(?:(\d+)H)?(?:(\d+)M)?/); 
 const AIRLINES={AC:"Air Canada",WS:"WestJet",TS:"Air Transat",PD:"Porter",UA:"United",AA:"American",DL:"Delta",B6:"JetBlue",F8:"Flair",WG:"Sunwing",ZZ:"Duffel Airways (test)",ZX:"Duffel Airways (test)"};
 const airline=(c)=>AIRLINES[c]||c||"—";
 
+// City lookup from the airports dataset: "PHL" → "Philadelphia"
+const CITY=new Map(AIRPORTS.map(a=>[a[0],a[2]||a[1]]));
+const cityOf=(code)=>CITY.get(code)||code;
+// Minutes between two ISO timestamps → "2h 39m"
+const gapDur=(a,b)=>{ if(!a||!b) return null; const m=Math.round((new Date(b)-new Date(a))/60000);
+  if(!(m>0)) return null; return `${Math.floor(m/60)}h ${String(m%60).padStart(2,"0")}m`; };
+
 function Slice({s,label}){
   const segs=s.segments||[];
   const first=segs[0]||{}, last=segs[segs.length-1]||{};
+  const lays=segs.slice(1).map((g,k)=>({at:g.from, len:gapDur(segs[k].arrive,g.depart)}));
   return (
     <div style={{flex:1,minWidth:230}}>
       <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>{label}</div>
@@ -257,11 +265,11 @@ function Slice({s,label}){
         {hhmm(first.depart)} {first.from} → {hhmm(last.arrive)} {last.to}
       </div>
       <div style={{fontFamily:mono,fontSize:11.5,color:MUTED,marginTop:2}}>
-        {dur(s.duration)} · {s.stops===0?"nonstop":`${s.stops} stop${s.stops>1?"s":""}`} · {segs.map(g=>`${g.carrier}${g.number||""}`).join(" · ")}
+        {dur(s.duration)} total · {s.stops===0?"nonstop":`${s.stops} stop${s.stops>1?"s":""}`} · {segs.map(g=>`${g.carrier}${g.number||""}`).join(" · ")}
       </div>
-      {s.stops>0 && (
+      {lays.length>0 && (
         <div style={{fontFamily:mono,fontSize:10.5,color:MUTED,marginTop:1}}>
-          via {segs.slice(0,-1).map(g=>g.to).join(", ")}
+          {lays.map(l=>`${l.len||"—"} in ${cityOf(l.at)} (${l.at})`).join(" · ")}
         </div>
       )}
     </div>
@@ -324,14 +332,6 @@ function FlightList({r,form}){
   );
 }
 
-// ---- Expanded detail panel: segment-by-segment with layovers, baggage, fare rules ----
-const layover=(a,b)=>{ // arrive ISO of prev seg, depart ISO of next seg → "1h 46m"
-  if(!a||!b) return null;
-  const m=Math.round((new Date(b)-new Date(a))/60000);
-  if(!(m>0)) return null;
-  return `${Math.floor(m/60)}h ${String(m%60).padStart(2,"0")}m`;
-};
-
 function OfferDetail({o,form}){
   const gfq=`Flights from ${form.origin} to ${form.destination} on ${form.depart}${form.return?` through ${form.return}`:""}`;
   const gfUrl=`https://www.google.com/travel/flights?q=${encodeURIComponent(gfq)}`;
@@ -350,7 +350,7 @@ function OfferDetail({o,form}){
             <React.Fragment key={k}>
               {k>0 && (
                 <div style={{fontFamily:mono,fontSize:10.5,color:BEST,margin:"4px 0 4px 10px"}}>
-                  ⟳ {layover(s.segments[k-1].arrive,g.depart)||"—"} layover in {g.from}
+                  ⟳ {gapDur(s.segments[k-1].arrive,g.depart)||"—"} layover in {cityOf(g.from)} ({g.from})
                 </div>
               )}
               <div style={{display:"flex",flexWrap:"wrap",gap:"4px 14px",alignItems:"baseline",marginTop:4}}>
