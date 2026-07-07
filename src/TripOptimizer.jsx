@@ -18,27 +18,59 @@ function searchAirports(q){
   return [...starts,...cityStarts,...contains].slice(0,8);
 }
 
+// ---- Award verification deep links. Aeroplan & AA accept parametric searches (formats
+// used by award tools); the rest get their award-flow landing page. Always verify there
+// before transferring anything.
+function awardHref(program,{from,to,date,adults=1,children=0}){
+  switch(program){
+    case "Aeroplan":
+      return `https://www.aircanada.com/aeroplan/redeem/availability/outbound?org0=${from}&dest0=${to}&departureDate0=${date}&ADT=${adults}&YTH=0&CHD=${children}&INF=0&marketCode=INT&tripType=O&lang=en-CA`;
+    case "American":
+      return `https://www.aa.com/booking/search?locale=en_US&pax=${adults+children}&adult=${adults}&child=${children}&type=OneWay&searchType=Award&slices=${encodeURIComponent(JSON.stringify([{orig:from,dest:to,date}]))}`;
+    case "Flying Blue": return "https://wwws.airfrance.ca/search/offers?bookingFlow=REWARD";
+    case "Qatar":       return "https://www.qatarairways.com/en/Privilege-Club/redeem-avios.html";
+    case "BA Avios":    return "https://www.britishairways.com/travel/redeem/execclub/_gf/en_gb";
+    default: return null;
+  }
+}
+const VERIFY_STYLE={fontFamily:mono,fontSize:10,fontWeight:700,color:PRIMARY,textDecoration:"none",
+  border:`1px solid ${PRIMARY}`,borderRadius:4,padding:"2px 7px",display:"inline-block",marginTop:4};
+
 function AirportField({v,on}){
-  const [text,setText]=useState(v||"");
+  const codes=String(v||"").split(",").filter(Boolean);
+  const [text,setText]=useState("");
   const [openList,setOpenList]=useState(false);
-  const boxRef=useRef(null);
-  useEffect(()=>{ setText(v||""); },[v]);              // external changes (e.g. saved form)
-  const hits=useMemo(()=>openList?searchAirports(text):[],[text,openList]);
-  const pick=(a)=>{ on(a[0]); setText(a[0]); setOpenList(false); };
+  const hits=useMemo(()=>openList?searchAirports(text).filter(a=>!codes.includes(a[0])):[],[text,openList,v]);
+  const commit=(list)=>on(list.join(","));
+  const pick=(a)=>{ if(codes.length>=3) return; commit([...codes,a[0]]); setText(""); setOpenList(false); };
+  const drop=(c)=>commit(codes.filter(x=>x!==c));
   return (
-    <div ref={boxRef} style={{position:"relative"}}>
-      <input value={text} placeholder="city or code"
-        onChange={e=>{ setText(e.target.value); setOpenList(true); }}
-        onFocus={()=>{ setOpenList(true); }}
-        onBlur={()=>setTimeout(()=>{
-          setOpenList(false);
-          const t=text.trim().toUpperCase();
-          if(/^[A-Z]{3}$/.test(t)&&AIRPORTS.some(a=>a[0]===t)){ if(t!==v) on(t); setText(t); }
-          else setText(v||"");                              // don't let free text masquerade as a code
-        },150)}  // let taps on the list land first
-        onKeyDown={e=>{ if(e.key==="Enter"&&hits.length){ e.preventDefault(); pick(hits[0]); } }}
-        style={{fontFamily:mono,fontSize:14,padding:"8px 10px",border:`1px solid ${HAIR}`,borderRadius:6,
-          width:120,background:SURFACE,color:INK}}/>
+    <div style={{position:"relative"}}>
+      <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:4,padding:"4px 6px",
+        border:`1px solid ${HAIR}`,borderRadius:6,background:SURFACE,minWidth:130,maxWidth:220}}>
+        {codes.map(c=>(
+          <span key={c} onClick={()=>drop(c)} title="tap to remove"
+            style={{fontFamily:mono,fontSize:12,fontWeight:800,background:PAPER,border:`1px solid ${HAIR}`,
+              borderRadius:4,padding:"2px 6px",cursor:"pointer"}}>
+            {c} ×
+          </span>
+        ))}
+        {codes.length<3&&(
+          <input value={text} placeholder={codes.length?"+ add":"city or code"}
+            onChange={e=>{ setText(e.target.value); setOpenList(true); }}
+            onFocus={()=>setOpenList(true)}
+            onBlur={()=>setTimeout(()=>{
+              setOpenList(false);
+              const t=text.trim().toUpperCase();
+              if(/^[A-Z]{3}$/.test(t)&&AIRPORTS.some(a=>a[0]===t)&&!codes.includes(t)) commit([...codes,t]);
+              setText("");                                    // don't let free text linger
+            },150)}  // let taps on the list land first
+            onKeyDown={e=>{ if(e.key==="Enter"&&hits.length){ e.preventDefault(); pick(hits[0]); }
+              if(e.key==="Backspace"&&!text&&codes.length) drop(codes[codes.length-1]); }}
+            style={{fontFamily:mono,fontSize:13,padding:"4px 2px",border:"none",outline:"none",
+              width:codes.length?64:96,background:"transparent",color:INK}}/>
+        )}
+      </div>
       {openList&&hits.length>0&&(
         <div style={{position:"absolute",top:"100%",left:0,zIndex:30,marginTop:4,minWidth:260,maxWidth:"78vw",
           background:SURFACE,border:`1px solid ${HAIR}`,borderRadius:8,boxShadow:"0 8px 24px rgba(0,0,0,0.12)",overflow:"hidden"}}>
@@ -52,6 +84,7 @@ function AirportField({v,on}){
           ))}
         </div>
       )}
+      {codes.length>1&&<div style={{fontFamily:mono,fontSize:9,color:MUTED,marginTop:2}}>searches all {codes.length}</div>}
     </div>
   );
 }
@@ -129,13 +162,25 @@ export default function TripOptimizer(){
 
   async function runCash(){
     setState({status:"loading", kind:"flights", data:null, sample:false, err:null});
-    const body={ origin:form.origin, destination:form.destination,
-      departureDate:form.depart, returnDate:form.return,
-      adults:Number(form.adults), children:Number(form.children), travelClass:form.cabin };
+    const origins=String(form.origin).split(",").filter(Boolean);
+    const dests=String(form.destination).split(",").filter(Boolean);
+    const combos=[];
+    for(const o of origins) for(const d of dests) if(combos.length<6) combos.push([o,d]);
     try{
-      const res=await fetch(`${API_BASE}/flights`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-      if(!res.ok) throw new Error(await errText(res));
-      setState({status:"done", kind:"flights", data:await res.json(), sample:false, err:null});
+      const settled=await Promise.allSettled(combos.map(([o,d])=>
+        fetch(`${API_BASE}/flights`,{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({ origin:o, destination:d, departureDate:form.depart, returnDate:form.return,
+            adults:Number(form.adults), children:Number(form.children), travelClass:form.cabin })})
+          .then(async res=>{ if(!res.ok) throw new Error(await errText(res)); return res.json(); })
+          .then(j=>({...j, _route:`${o}→${d}`}))));
+      const oks=settled.filter(s=>s.status==="fulfilled").map(s=>s.value);
+      if(!oks.length) throw new Error(settled[0]?.reason?.message||"all routes failed");
+      const offers=oks.flatMap(r=>(r.offers||[]).map(o=>({...o,_route:r._route})))
+        .sort((a,b)=>a.price-b.price);
+      const merged={ ...oks[0], offers, _routes:combos.map(c=>c.join("→")),
+        _cacheAgeMs:Math.max(...oks.map(r=>r._cacheAgeMs||0)),
+        note:oks.length<combos.length?`${combos.length-oks.length} route(s) failed`:oks[0].note };
+      setState({status:"done", kind:"flights", data:merged, sample:false, err:null});
     }catch(e){
       setState({status:"done", kind:"flights", data:null, sample:false, err:e.message});
     }
@@ -144,13 +189,13 @@ export default function TripOptimizer(){
   async function run(){
     if(mode==="cash") return runCash();
     setState({status:"loading", kind:"optimize", data:null, sample:false, err:null});
-    const cfg={ origin:form.origin, destination:form.destination,
+    const cfg={ origin:String(form.origin).split(",")[0], destination:String(form.destination).split(",")[0],
       target:{depart:form.depart, return:form.return}, flexDays:Number(form.flexDays),
       party:{adults:Number(form.adults), children:Number(form.children)}, cabin:form.cabin,
-      sources:["aeroplan","flyingblue","american"],
+      sources:["aeroplan","flyingblue","american","qatar"],
       balances:Object.fromEntries(balances.map(b=>[b.program,Number(b.amount)])),
       valuations:Object.fromEntries(balances.map(b=>[b.program,Number(b.value)])),
-      aviosDistance:1187, awardTax:{Aeroplan:80,"Flying Blue":90,American:50,"BA Avios":60},
+      aviosDistance:1187, awardTax:{Aeroplan:80,"Flying Blue":90,American:50,"BA Avios":60,Qatar:60},
       asOf:new Date().toISOString().slice(0,10) };
     try{
       const res=await fetch(`${API_BASE}/optimize`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(cfg)});
@@ -233,7 +278,8 @@ export default function TripOptimizer(){
         )}
 
         {state.kind==="flights" && state.data && <FlightList r={state.data} form={form}/>}
-        {state.kind==="optimize" && state.data && <Results r={state.data} balances={balances}/>}
+        {state.kind==="optimize" && state.data && <Results r={state.data} balances={balances} form={form}/>}
+        <WatchPanel form={form}/>
         {state.status==="idle" && <Empty/>}
       </div>
     </div>
@@ -276,6 +322,75 @@ function Slice({s,label}){
   );
 }
 
+// ---- Price watches: saved search + target price, emailed when it hits ----
+function WatchPanel({form}){
+  const [watches,setWatches]=useState(null);   // null = not loaded
+  const [email,setEmail]=useState("");
+  const [target,setTarget]=useState("");
+  const [msg,setMsg]=useState(null);
+  const refresh=()=>fetch(`${API_BASE}/watches`).then(r=>r.json()).then(setWatches).catch(()=>setWatches([]));
+  useEffect(()=>{ refresh(); },[]);
+  async function create(){
+    setMsg(null);
+    try{
+      const res=await fetch(`${API_BASE}/watches`,{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ origin:String(form.origin).split(",")[0], destination:String(form.destination).split(",")[0],
+          depart:form.depart, return:form.return, adults:Number(form.adults), children:Number(form.children),
+          cabin:form.cabin, targetPrice:Number(target), email })});
+      const j=await res.json();
+      if(!res.ok) throw new Error(j.error||"failed");
+      setMsg(`Watching ${j.origin}→${j.destination} — alerts to ${j.email} at ≤ $${j.targetPrice}`);
+      setTarget(""); refresh();
+    }catch(e){ setMsg(`Error: ${e.message}`); }
+  }
+  async function drop(id){
+    await fetch(`${API_BASE}/watches/${id}`,{method:"DELETE"}); refresh();
+  }
+  return (
+    <div style={{marginTop:26,borderTop:`1px solid ${HAIR}`,paddingTop:16}}>
+      <h2 style={{fontSize:12,fontFamily:mono,letterSpacing:"0.14em",textTransform:"uppercase",color:MUTED,margin:"0 0 10px"}}>
+        Price watch
+      </h2>
+      <div style={{display:"flex",flexWrap:"wrap",gap:8,alignItems:"flex-end"}}>
+        <Field label="Alert email">
+          <input value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" inputMode="email"
+            style={{fontFamily:mono,fontSize:13,padding:"8px 10px",border:`1px solid ${HAIR}`,borderRadius:6,width:190,background:SURFACE,color:INK}}/>
+        </Field>
+        <Field label="Target $ (party, all-in)">
+          <input value={target} onChange={e=>setTarget(e.target.value)} placeholder="450" inputMode="numeric"
+            style={{fontFamily:mono,fontSize:13,padding:"8px 10px",border:`1px solid ${HAIR}`,borderRadius:6,width:90,background:SURFACE,color:INK}}/>
+        </Field>
+        <button onClick={create} disabled={!email||!target}
+          style={{fontFamily:mono,fontSize:12,fontWeight:700,letterSpacing:"0.06em",padding:"9px 14px",
+            background:PRIMARY,color:"#fff",border:"none",borderRadius:6,cursor:"pointer",opacity:(!email||!target)?0.5:1}}>
+          Watch this search
+        </button>
+      </div>
+      <div style={{fontFamily:mono,fontSize:10,color:MUTED,marginTop:6}}>
+        Watches {String(form.origin).split(",")[0]}→{String(form.destination).split(",")[0]} · {form.depart}{form.return?` → ${form.return}`:""} · checks ~every 6h, emails when the cheapest all-in party price hits your target (12h cooldown between alerts).
+      </div>
+      {msg&&<div style={{fontFamily:mono,fontSize:11,color:msg.startsWith("Error")?BEST:POS,marginTop:6}}>{msg}</div>}
+      {watches&&watches.length>0&&(
+        <div style={{marginTop:12}}>
+          {watches.map(w=>(
+            <div key={w.id} style={{display:"flex",flexWrap:"wrap",gap:"4px 12px",alignItems:"baseline",
+              fontFamily:mono,fontSize:11.5,padding:"7px 0",borderBottom:`1px solid ${HAIR}`}}>
+              <span style={{fontWeight:800}}>{w.origin}→{w.destination}</span>
+              <span style={{color:MUTED}}>{w.depart}{w.return?`→${w.return}`:""} · ≤ ${w.targetPrice} · {w.email}</span>
+              <span style={{color:MUTED}}>
+                {w.lastPrice!=null?`last seen $${Math.round(w.lastPrice)}`:"not checked yet"}
+                {w.lastNotifiedAt?` · alerted ${w.lastNotifiedAt.slice(0,10)}`:""}
+                {w.lastError?` · ⚠ ${w.lastError}`:""}
+              </span>
+              <span onClick={()=>drop(w.id)} style={{color:BEST,cursor:"pointer",marginLeft:"auto"}}>remove ×</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FlightList({r,form}){
   const offers=r.offers||[];
   const pax=(Number(form.adults)||0)+(Number(form.children)||0)||1;
@@ -306,6 +421,7 @@ function FlightList({r,form}){
               <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
                 {i===0 && <span style={{fontFamily:mono,fontSize:9,letterSpacing:"0.1em",color:"#fff",background:BEST,padding:"2px 6px",borderRadius:3}}>CHEAPEST</span>}
                 <span style={{fontWeight:800,fontSize:15}}>{airline(o.validatingAirlines?.[0])}</span>
+                {r._routes?.length>1&&o._route&&<span style={{fontFamily:mono,fontSize:10,fontWeight:700,color:INK,background:PAPER,border:`1px solid ${HAIR}`,borderRadius:3,padding:"1px 5px"}}>{o._route}</span>}
                 {o.cabin && <span style={{fontFamily:mono,fontSize:10,color:MUTED}}>{o.cabin.replace("_"," ")}</span>}
               </div>
               <div style={{display:"flex",flexWrap:"wrap",gap:16,marginTop:10}}>
@@ -387,10 +503,16 @@ function OfferDetail({o,form}){
   );
 }
 
-function Results({r,balances}){
-  const b=r.best, aw=b.award, cashWins=b.winner==="cash";
+function Results({r,balances,form}){
+  const O=String(form.origin).split(",")[0], D=String(form.destination).split(",")[0];
+  const pax={adults:Number(form.adults)||1, children:Number(form.children)||0};
+  const b=r.best, aw=b.award, mx=b.mixed;
+  const w=b.winner; // "cash" | "award" | "mixed"
   const [sel,setSel]=useState(null); // "dep|ret" of tapped cell
   const selCell=sel?r.grid.find(g=>g.dep+"|"+g.ret===sel):null;
+  const headAmt=w==="cash"?cad(b.cash.price):w==="award"?cad(aw.outOfPocket):cad(mx.outOfPocket);
+  const headPts=w==="award"?aw.totalPts:w==="mixed"?mx.totalPts:null;
+  const headCpp=w==="award"?aw.cppCaptured:w==="mixed"?mx.cppCaptured:null;
   return (
     <div>
       {/* headline */}
@@ -400,22 +522,36 @@ function Results({r,balances}){
             <span style={{fontFamily:mono,fontSize:10,letterSpacing:"0.12em",color:"#fff",background:BEST,padding:"2px 7px",borderRadius:3}}>CHEAPEST</span>
             <div style={{fontSize:22,fontWeight:800,marginTop:8}}>{b.dep} → {b.ret}</div>
             <div style={{color:MUTED,fontSize:13,marginTop:2}}>
-              {cashWins?"Pay cash":"Use points"} · cash if paid {cad(b.cash.price)}
+              {w==="cash"?"Pay cash":w==="award"?"Use points":"Split: cash one way, points the other"} · cash if paid {cad(b.cash.price)}
             </div>
           </div>
           <div style={{textAlign:"right"}}>
-            <div style={{fontFamily:mono,fontSize:28,fontWeight:800,color:cashWins?INK:POS}}>
-              {cashWins?cad(b.cash.price):cad(aw.outOfPocket)}
-              {!cashWins && <span style={{fontSize:13,color:MUTED,fontWeight:600}}> + {fmt(aw.totalPts)} pts</span>}
+            <div style={{fontFamily:mono,fontSize:28,fontWeight:800,color:w==="cash"?INK:POS}}>
+              {headAmt}
+              {headPts!=null && <span style={{fontSize:13,color:MUTED,fontWeight:600}}> + {fmt(headPts)} pts</span>}
             </div>
-            {!cashWins && <div style={{fontFamily:mono,fontSize:12,color:POS}}>{aw.cppCaptured.toFixed(2)} ¢/pt captured</div>}
+            {headCpp!=null && <div style={{fontFamily:mono,fontSize:12,color:POS}}>{headCpp.toFixed(2)} ¢/pt captured</div>}
           </div>
         </div>
-        {!cashWins && (
+        {w==="award" && (
           <div style={{marginTop:14,borderTop:`1px solid ${HAIR}`,paddingTop:12,display:"flex",flexWrap:"wrap",gap:18}}>
-            <Leg dir="Outbound" l={aw.outLeg}/><Leg dir="Return" l={aw.inLeg}/>
+            <Leg dir="Outbound" l={aw.outLeg} href={awardHref(aw.outLeg.program,{from:O,to:D,date:b.dep,...pax})}/><Leg dir="Return" l={aw.inLeg} href={awardHref(aw.inLeg.program,{from:D,to:O,date:b.ret,...pax})}/>
             <div style={{fontFamily:mono,fontSize:11,color:MUTED,alignSelf:"flex-end"}}>
               draws: {Object.entries(aw.draws).map(([k,v])=>`${k} ${fmt(v)}`).join(" · ")}
+            </div>
+          </div>
+        )}
+        {w==="mixed" && (
+          <div style={{marginTop:14,borderTop:`1px solid ${HAIR}`,paddingTop:12,display:"flex",flexWrap:"wrap",gap:18}}>
+            <div style={{minWidth:180}}>
+              <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>
+                {mx.cashLeg==="out"?"Outbound":"Return"} — cash
+              </div>
+              <div style={{fontWeight:700,fontSize:14,marginTop:3}}>{cad(mx.cashPrice)} one-way</div>
+            </div>
+            <Leg dir={mx.cashLeg==="out"?"Return — points":"Outbound — points"} l={mx.awardLeg} href={mx.cashLeg==="out"?awardHref(mx.awardLeg.program,{from:D,to:O,date:b.ret,...pax}):awardHref(mx.awardLeg.program,{from:O,to:D,date:b.dep,...pax})}/>
+            <div style={{fontFamily:mono,fontSize:11,color:MUTED,alignSelf:"flex-end"}}>
+              draws: {Object.entries(mx.draws).map(([k,v])=>`${k} ${fmt(v)}`).join(" · ")}
             </div>
           </div>
         )}
@@ -423,7 +559,7 @@ function Results({r,balances}){
 
       <Matrix grid={r.grid} sel={sel} onSel={(k)=>setSel(s=>s===k?null:k)}/>
       {selCell
-        ? <PairDetail g={selCell} balances={balances}/>
+        ? <PairDetail g={selCell} balances={balances} O={O} D={D} pax={pax}/>
         : <div style={{fontFamily:mono,fontSize:11,color:MUTED,marginTop:10}}>Tap any date pair for the cash-vs-points breakdown.</div>}
 
       <p style={{color:MUTED,fontSize:12,marginTop:16,lineHeight:1.6}}>
@@ -434,14 +570,14 @@ function Results({r,balances}){
 }
 
 // ---- Tapped-cell breakdown: cash vs points for one date pair, always both sides ----
-function PairDetail({g,balances}){
+function PairDetail({g,balances,O,D,pax}){
   const ref=g.award||g.awardRef;                 // feasible solve, else unconstrained reference
   const feasible=!!g.award;
   const bal=Object.fromEntries((balances||[]).map(b=>[b.program,Number(b.amount)||0]));
   const shorts=ref&&!feasible
     ? Object.entries(ref.draws).map(([src,need])=>({src,need,have:bal[src]??0,short:Math.max(0,need-(bal[src]??0))})).filter(s=>s.short>0)
     : [];
-  const cashWins=g.winner==="cash";
+  // winner: "cash" | "award" | "mixed"
   const col={flex:"1 1 220px",minWidth:220,background:SURFACE,border:`1px solid ${HAIR}`,borderRadius:8,padding:"12px 14px"};
   return (
     <div style={{marginTop:12}}>
@@ -449,14 +585,32 @@ function PairDetail({g,balances}){
         {g.dep} → {g.ret}
       </div>
       <div style={{display:"flex",flexWrap:"wrap",gap:10}}>
-        <div style={{...col,borderColor:cashWins?POS:HAIR,borderLeft:`4px solid ${cashWins?POS:HAIR}`}}>
-          <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>Cash{cashWins?" · winner":""}</div>
+        <div style={{...col,borderColor:g.winner==="cash"?POS:HAIR,borderLeft:`4px solid ${g.winner==="cash"?POS:HAIR}`}}>
+          <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>Cash{g.winner==="cash"?" · winner":""}</div>
           <div style={{fontFamily:mono,fontSize:22,fontWeight:800,marginTop:4}}>{cad(g.cash.price)}</div>
           <div style={{fontFamily:mono,fontSize:11,color:MUTED}}>whole party, all-in{g.cash.taxes?` · taxes ${cad(g.cash.taxes)}`:""}</div>
+          <a href={`https://www.google.com/travel/flights?q=${encodeURIComponent(`Flights from ${O} to ${D} on ${g.dep} through ${g.ret}`)}`}
+            target="_blank" rel="noopener noreferrer" style={VERIFY_STYLE}>Google Flights ↗</a>
         </div>
-        <div style={{...col,borderColor:!cashWins?POS:HAIR,borderLeft:`4px solid ${!cashWins?POS:HAIR}`}}>
+        {g.mixed&&(
+          <div style={{...col,borderColor:g.winner==="mixed"?POS:HAIR,borderLeft:`4px solid ${g.winner==="mixed"?POS:HAIR}`}}>
+            <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>Split{g.winner==="mixed"?" · winner":""}</div>
+            <div style={{fontFamily:mono,fontSize:22,fontWeight:800,marginTop:4}}>
+              {cad(g.mixed.outOfPocket)} <span style={{fontSize:13,fontWeight:600,color:MUTED}}>+ {fmt(g.mixed.totalPts)} pts</span>
+            </div>
+            <div style={{fontFamily:mono,fontSize:11,color:MUTED,marginTop:4,lineHeight:1.7}}>
+              {g.mixed.cashLeg==="out"?"out":"ret"}: cash {cad(g.mixed.cashPrice)} one-way<br/>
+              {g.mixed.cashLeg==="out"?"ret":"out"}: {g.mixed.awardLeg.program}{g.mixed.awardLeg.estimated?" [est]":""} {fmt(g.mixed.awardLeg.sourcePts)} via {g.mixed.awardLeg.source}<br/>
+              value captured: {g.mixed.cppCaptured.toFixed(2)} ¢/pt
+            </div>
+            {(()=>{ const isRetAward=g.mixed.cashLeg==="out";
+              const h=awardHref(g.mixed.awardLeg.program,{from:isRetAward?D:O,to:isRetAward?O:D,date:isRetAward?g.ret:g.dep,...pax});
+              return h&&<a href={h} target="_blank" rel="noopener noreferrer" style={VERIFY_STYLE}>verify on {g.mixed.awardLeg.program} ↗</a>; })()}
+          </div>
+        )}
+        <div style={{...col,borderColor:g.winner==="award"?POS:HAIR,borderLeft:`4px solid ${g.winner==="award"?POS:HAIR}`}}>
           <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>
-            Points{!cashWins?" · winner":""}{!feasible&&ref?" · not enough points":""}
+            Points{g.winner==="award"?" · winner":""}{!feasible&&ref?" · not enough points":""}
           </div>
           {ref?(
             <>
@@ -473,6 +627,12 @@ function PairDetail({g,balances}){
                   {shorts.map(s=>`short ${fmt(s.short)} on ${s.src} (have ${fmt(s.have)})`).join(" · ")}
                 </div>
               )}
+              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                {awardHref(ref.outLeg.program,{from:O,to:D,date:g.dep,...pax})&&
+                  <a href={awardHref(ref.outLeg.program,{from:O,to:D,date:g.dep,...pax})} target="_blank" rel="noopener noreferrer" style={VERIFY_STYLE}>verify out · {ref.outLeg.program} ↗</a>}
+                {awardHref(ref.inLeg.program,{from:D,to:O,date:g.ret,...pax})&&
+                  <a href={awardHref(ref.inLeg.program,{from:D,to:O,date:g.ret,...pax})} target="_blank" rel="noopener noreferrer" style={VERIFY_STYLE}>verify ret · {ref.inLeg.program} ↗</a>}
+              </div>
             </>
           ):(
             <div style={{fontFamily:mono,fontSize:12,color:MUTED,marginTop:6}}>No award space found for this pair.</div>
@@ -486,7 +646,7 @@ function PairDetail({g,balances}){
   );
 }
 
-function Leg({dir,l}){
+function Leg({dir,l,href}){
   return (
     <div style={{minWidth:180}}>
       <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>{dir}</div>
@@ -496,6 +656,7 @@ function Leg({dir,l}){
       <div style={{fontFamily:mono,fontSize:12,color:MUTED,marginTop:2}}>
         {fmt(l.points)} via {l.source} ({l.via}) → {fmt(l.sourcePts)} pts
       </div>
+      {href && <a href={href} target="_blank" rel="noopener noreferrer" style={VERIFY_STYLE}>verify on {l.program} ↗</a>}
     </div>
   );
 }
@@ -531,7 +692,7 @@ function Matrix({grid,sel,onSel}){
                         padding:"7px 9px",borderRadius:4,textAlign:"center",fontWeight:700,
                         outline:isSel?`2px solid ${PRIMARY}`:isBest?`2px solid ${BEST}`:"none",outlineOffset:1,position:"relative"}}>
                         {cad(g.bestEcon)}
-                        <span style={{position:"absolute",top:2,right:3,fontSize:8,opacity:0.85}}>{g.winner==="award"?"◆":"$"}</span>
+                        <span style={{position:"absolute",top:2,right:3,fontSize:8,opacity:0.85}}>{g.winner==="award"?"◆":g.winner==="mixed"?"◐":"$"}</span>
                       </div>
                     </td>
                   );})}
@@ -540,7 +701,7 @@ function Matrix({grid,sel,onSel}){
           </tbody>
         </table>
       </div>
-      <div style={{fontFamily:mono,fontSize:10,color:MUTED,marginTop:6}}>◆ points · $ cash · amber ring = cheapest · blue ring = selected · greener = cheaper · tap a cell for details</div>
+      <div style={{fontFamily:mono,fontSize:10,color:MUTED,marginTop:6}}>◆ points · ◐ split · $ cash · amber ring = cheapest · blue ring = selected · greener = cheaper · tap a cell for details</div>
     </div>
   );
 }
