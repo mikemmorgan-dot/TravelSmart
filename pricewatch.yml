@@ -1,0 +1,16 @@
+name: price-watch
+on:
+  schedule:
+    - cron: "23 3,9,15,21 * * *"   # every 6h (UTC); odd minute avoids GH's busy :00 window
+  workflow_dispatch: {}             # manual "Run workflow" button for testing
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger watch run
+        run: |
+          # First request may hit a Render cold start (~30s), hence generous timeout + retry.
+          curl -sS -X POST "https://travelsmart-iclz.onrender.com/watches/run" \
+            -H "x-watch-secret: ${{ secrets.WATCH_SECRET }}" \
+            --max-time 180 --retry 2 --retry-delay 20 --fail-with-body

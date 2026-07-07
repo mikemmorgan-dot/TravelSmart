@@ -46,15 +46,56 @@ function send(res, code, body) {
   res.writeHead(code, {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, x-watch-secret",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
   });
   res.end(JSON.stringify(body));
 }
 
+// ---- Price watches: saved searches re-priced on a schedule, email on target hit ----
+const { listWatches, createWatch, deleteWatch, runWatches } = require("./watches");
+const APP_URL = process.env.APP_URL || "https://travelsmart-iclz.onrender.com";
+const watchFlights = async (p) => (await flightsCached(p)).value;
+async function runAllWatches() {
+  const summary = await runWatches(watchFlights, APP_URL);
+  console.log("[watch] run:", JSON.stringify(summary));
+  return summary;
+}
+// Best-effort in-process timer. On Render free tier the service sleeps when idle, so
+// this only fires while awake — the GitHub Actions cron hitting /watches/run is the
+// reliable trigger; this just catches extra checks while the app is in use.
+const intervalMin = Number(process.env.WATCH_INTERVAL_MIN || 360);
+if (intervalMin > 0) setInterval(() => runAllWatches().catch((e) => console.error("[watch]", e.message)), intervalMin * 60 * 1000).unref();
+
 const server = http.createServer((req, res) => {
   if (req.method === "OPTIONS") return send(res, 204, {});
   if (req.method === "GET" && req.url === "/health") return send(res, 200, { ok: true });
+
+  // ---- watches ----
+  if (req.url === "/watches" && req.method === "GET") return send(res, 200, listWatches());
+  if (req.url === "/watches" && req.method === "POST") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      try { send(res, 200, createWatch(JSON.parse(body || "{}"))); }
+      catch (e) { send(res, 400, { error: e.message }); }
+    });
+    return;
+  }
+  if (req.url.startsWith("/watches/") && req.method === "DELETE") {
+    const id = req.url.split("/")[2];
+    return send(res, 200, { deleted: deleteWatch(id) });
+  }
+  if (req.url === "/watches/run" && req.method === "POST") {
+    const secret = process.env.WATCH_SECRET;
+    if (secret && req.headers["x-watch-secret"] !== secret)
+      return send(res, 401, { error: "bad or missing x-watch-secret" });
+    runAllWatches()
+      .then((summary) => send(res, 200, { ran: summary.length, summary }))
+      .catch((e) => { console.error("WATCH RUN ERROR:", e.stack || e.message); send(res, 500, { error: e.message }); });
+    return;
+  }
+
   if (req.method === "POST" && req.url === "/optimize") {
     let body = "";
     req.on("data", (c) => (body += c));
