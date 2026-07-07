@@ -1,4 +1,60 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
+import { AIRPORTS } from "./airports";
+
+// ---- Airport typeahead: type a city, airport name, or code; pick from matches ----
+function searchAirports(q){
+  q=q.trim().toLowerCase();
+  if(q.length<2) return [];
+  const starts=[], cityStarts=[], contains=[];
+  for(const a of AIRPORTS){
+    const [iata,name,city]=a;
+    const li=iata.toLowerCase(), lc=city.toLowerCase(), ln=name.toLowerCase();
+    if(li===q) starts.unshift(a);                       // exact code first
+    else if(li.startsWith(q)) starts.push(a);
+    else if(lc.startsWith(q)) cityStarts.push(a);
+    else if(lc.includes(q)||ln.includes(q)) contains.push(a);
+    if(starts.length+cityStarts.length+contains.length>60) break;
+  }
+  return [...starts,...cityStarts,...contains].slice(0,8);
+}
+
+function AirportField({v,on}){
+  const [text,setText]=useState(v||"");
+  const [openList,setOpenList]=useState(false);
+  const boxRef=useRef(null);
+  useEffect(()=>{ setText(v||""); },[v]);              // external changes (e.g. saved form)
+  const hits=useMemo(()=>openList?searchAirports(text):[],[text,openList]);
+  const pick=(a)=>{ on(a[0]); setText(a[0]); setOpenList(false); };
+  return (
+    <div ref={boxRef} style={{position:"relative"}}>
+      <input value={text} placeholder="city or code"
+        onChange={e=>{ setText(e.target.value); setOpenList(true); }}
+        onFocus={()=>{ setOpenList(true); }}
+        onBlur={()=>setTimeout(()=>{
+          setOpenList(false);
+          const t=text.trim().toUpperCase();
+          if(/^[A-Z]{3}$/.test(t)&&AIRPORTS.some(a=>a[0]===t)){ if(t!==v) on(t); setText(t); }
+          else setText(v||"");                              // don't let free text masquerade as a code
+        },150)}  // let taps on the list land first
+        onKeyDown={e=>{ if(e.key==="Enter"&&hits.length){ e.preventDefault(); pick(hits[0]); } }}
+        style={{fontFamily:mono,fontSize:14,padding:"8px 10px",border:`1px solid ${HAIR}`,borderRadius:6,
+          width:120,background:SURFACE,color:INK}}/>
+      {openList&&hits.length>0&&(
+        <div style={{position:"absolute",top:"100%",left:0,zIndex:30,marginTop:4,minWidth:260,maxWidth:"78vw",
+          background:SURFACE,border:`1px solid ${HAIR}`,borderRadius:8,boxShadow:"0 8px 24px rgba(0,0,0,0.12)",overflow:"hidden"}}>
+          {hits.map(a=>(
+            <div key={a[0]} onMouseDown={e=>{ e.preventDefault(); pick(a); }}
+              style={{padding:"9px 12px",cursor:"pointer",borderBottom:`1px solid ${HAIR}`}}>
+              <span style={{fontFamily:mono,fontWeight:800,fontSize:13}}>{a[0]}</span>
+              <span style={{fontSize:12.5,marginLeft:8}}>{a[2]?`${a[2]} — `:""}{a[1]}</span>
+              <span style={{fontFamily:mono,fontSize:10,color:MUTED,marginLeft:6}}>{a[3]}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* TripOptimizer — front-end over the orchestrator engine (server.js / POST /optimize).
    In this preview it can't reach your localhost backend, so it shows a labelled SAMPLE.
@@ -133,8 +189,8 @@ export default function TripOptimizer(){
         {/* form */}
         <div style={{display:"flex",flexWrap:"wrap",gap:16,margin:"20px 0"}}>
           <Panel title="Trip">
-            <Row><Field label="From"><In v={form.origin} on={v=>upd("origin",v.toUpperCase())} w={64}/></Field>
-              <Field label="To"><In v={form.destination} on={v=>upd("destination",v.toUpperCase())} w={64}/></Field>
+            <Row><Field label="From"><AirportField v={form.origin} on={v=>upd("origin",v)}/></Field>
+              <Field label="To"><AirportField v={form.destination} on={v=>upd("destination",v)}/></Field>
               <Field label="Cabin"><Sel v={form.cabin} on={v=>upd("cabin",v)} opts={["economy","business"]}/></Field></Row>
             <Row><Field label="Depart"><In type="date" v={form.depart} on={v=>upd("depart",v)} w={140}/></Field>
               <Field label="Return"><In type="date" v={form.return} on={v=>upd("return",v)} w={140}/></Field></Row>
@@ -177,7 +233,7 @@ export default function TripOptimizer(){
         )}
 
         {state.kind==="flights" && state.data && <FlightList r={state.data} form={form}/>}
-        {state.kind==="optimize" && state.data && <Results r={state.data}/>}
+        {state.kind==="optimize" && state.data && <Results r={state.data} balances={balances}/>}
         {state.status==="idle" && <Empty/>}
       </div>
     </div>
@@ -331,8 +387,10 @@ function OfferDetail({o,form}){
   );
 }
 
-function Results({r}){
+function Results({r,balances}){
   const b=r.best, aw=b.award, cashWins=b.winner==="cash";
+  const [sel,setSel]=useState(null); // "dep|ret" of tapped cell
+  const selCell=sel?r.grid.find(g=>g.dep+"|"+g.ret===sel):null;
   return (
     <div>
       {/* headline */}
@@ -363,11 +421,67 @@ function Results({r}){
         )}
       </div>
 
-      <Matrix grid={r.grid}/>
+      <Matrix grid={r.grid} sel={sel} onSel={(k)=>setSel(s=>s===k?null:k)}/>
+      {selCell
+        ? <PairDetail g={selCell} balances={balances}/>
+        : <div style={{fontFamily:mono,fontSize:11,color:MUTED,marginTop:10}}>Tap any date pair for the cash-vs-points breakdown.</div>}
 
       <p style={{color:MUTED,fontSize:12,marginTop:16,lineHeight:1.6}}>
         <strong style={{color:INK}}>Read the flags.</strong> <span style={{color:BEST}}>[est]</span> marks the distance-based Avios price Seats.aero can't see — {r.aviosNote}. Verify award space before transferring; transfers are irreversible. Cash sweep used {r.cashCalls} searches.
       </p>
+    </div>
+  );
+}
+
+// ---- Tapped-cell breakdown: cash vs points for one date pair, always both sides ----
+function PairDetail({g,balances}){
+  const ref=g.award||g.awardRef;                 // feasible solve, else unconstrained reference
+  const feasible=!!g.award;
+  const bal=Object.fromEntries((balances||[]).map(b=>[b.program,Number(b.amount)||0]));
+  const shorts=ref&&!feasible
+    ? Object.entries(ref.draws).map(([src,need])=>({src,need,have:bal[src]??0,short:Math.max(0,need-(bal[src]??0))})).filter(s=>s.short>0)
+    : [];
+  const cashWins=g.winner==="cash";
+  const col={flex:"1 1 220px",minWidth:220,background:SURFACE,border:`1px solid ${HAIR}`,borderRadius:8,padding:"12px 14px"};
+  return (
+    <div style={{marginTop:12}}>
+      <div style={{fontFamily:mono,fontSize:11,letterSpacing:"0.1em",color:MUTED,textTransform:"uppercase",marginBottom:8}}>
+        {g.dep} → {g.ret}
+      </div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:10}}>
+        <div style={{...col,borderColor:cashWins?POS:HAIR,borderLeft:`4px solid ${cashWins?POS:HAIR}`}}>
+          <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>Cash{cashWins?" · winner":""}</div>
+          <div style={{fontFamily:mono,fontSize:22,fontWeight:800,marginTop:4}}>{cad(g.cash.price)}</div>
+          <div style={{fontFamily:mono,fontSize:11,color:MUTED}}>whole party, all-in{g.cash.taxes?` · taxes ${cad(g.cash.taxes)}`:""}</div>
+        </div>
+        <div style={{...col,borderColor:!cashWins?POS:HAIR,borderLeft:`4px solid ${!cashWins?POS:HAIR}`}}>
+          <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>
+            Points{!cashWins?" · winner":""}{!feasible&&ref?" · not enough points":""}
+          </div>
+          {ref?(
+            <>
+              <div style={{fontFamily:mono,fontSize:22,fontWeight:800,marginTop:4,color:feasible?INK:MUTED}}>
+                {fmt(ref.totalPts)} pts <span style={{fontSize:13,fontWeight:600,color:MUTED}}>+ {cad(ref.outOfPocket)} taxes</span>
+              </div>
+              <div style={{fontFamily:mono,fontSize:11,color:MUTED,marginTop:4,lineHeight:1.7}}>
+                out: {ref.outLeg.program}{ref.outLeg.estimated?" [est]":""} {fmt(ref.outLeg.sourcePts)} via {ref.outLeg.source}<br/>
+                ret: {ref.inLeg.program}{ref.inLeg.estimated?" [est]":""} {fmt(ref.inLeg.sourcePts)} via {ref.inLeg.source}
+                {g.award&&<><br/>value captured: {g.award.cppCaptured.toFixed(2)} ¢/pt</>}
+              </div>
+              {shorts.length>0&&(
+                <div style={{fontFamily:mono,fontSize:11,color:BEST,marginTop:6}}>
+                  {shorts.map(s=>`short ${fmt(s.short)} on ${s.src} (have ${fmt(s.have)})`).join(" · ")}
+                </div>
+              )}
+            </>
+          ):(
+            <div style={{fontFamily:mono,fontSize:12,color:MUTED,marginTop:6}}>No award space found for this pair.</div>
+          )}
+        </div>
+      </div>
+      <div style={{fontFamily:mono,fontSize:10,color:MUTED,marginTop:8}}>
+        Points are for all travellers. Programs don't let you split one ticket between points and cash here — it's one or the other per ticket (taxes are always cash).
+      </div>
     </div>
   );
 }
@@ -386,7 +500,7 @@ function Leg({dir,l}){
   );
 }
 
-function Matrix({grid}){
+function Matrix({grid,sel,onSel}){
   const deps=[...new Set(grid.map(g=>g.dep))].sort();
   const rets=[...new Set(grid.map(g=>g.ret))].sort();
   const by={}; grid.forEach(g=>by[g.dep+"|"+g.ret]=g);
@@ -408,12 +522,14 @@ function Matrix({grid}){
               <tr key={dep}>
                 <td style={{padding:"4px 8px",color:MUTED}}>{dep.slice(5)}</td>
                 {rets.map(ret=>{ const g=by[dep+"|"+ret]; if(!g) return <td key={ret}/>;
-                  const isBest=g===best;
+                  const key=dep+"|"+ret, isBest=g===best, isSel=sel===key;
                   return (
                     <td key={ret} style={{padding:2}}>
-                      <div title={`${g.winner}`} style={{background:shade(g.bestEcon),color:"#fff",
+                      <div role="button" tabIndex={0} onClick={()=>onSel(key)}
+                        onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); onSel(key); } }}
+                        title={`${g.winner}`} style={{background:shade(g.bestEcon),color:"#fff",cursor:"pointer",
                         padding:"7px 9px",borderRadius:4,textAlign:"center",fontWeight:700,
-                        outline:isBest?`2px solid ${BEST}`:"none",outlineOffset:1,position:"relative"}}>
+                        outline:isSel?`2px solid ${PRIMARY}`:isBest?`2px solid ${BEST}`:"none",outlineOffset:1,position:"relative"}}>
                         {cad(g.bestEcon)}
                         <span style={{position:"absolute",top:2,right:3,fontSize:8,opacity:0.85}}>{g.winner==="award"?"◆":"$"}</span>
                       </div>
@@ -424,7 +540,7 @@ function Matrix({grid}){
           </tbody>
         </table>
       </div>
-      <div style={{fontFamily:mono,fontSize:10,color:MUTED,marginTop:6}}>◆ points · $ cash · amber ring = cheapest · greener = cheaper</div>
+      <div style={{fontFamily:mono,fontSize:10,color:MUTED,marginTop:6}}>◆ points · $ cash · amber ring = cheapest · blue ring = selected · greener = cheaper · tap a cell for details</div>
     </div>
   );
 }
