@@ -72,19 +72,23 @@ const server = http.createServer((req, res) => {
   if (req.method === "GET" && req.url === "/health") return send(res, 200, { ok: true });
 
   // ---- watches ----
-  if (req.url === "/watches" && req.method === "GET") return send(res, 200, listWatches());
+  if (req.url === "/watches" && req.method === "GET") {
+    listWatches().then((l) => send(res, 200, l)).catch((e) => send(res, 500, { error: e.message }));
+    return;
+  }
   if (req.url === "/watches" && req.method === "POST") {
     let body = "";
     req.on("data", (c) => (body += c));
-    req.on("end", () => {
-      try { send(res, 200, createWatch(JSON.parse(body || "{}"))); }
+    req.on("end", async () => {
+      try { send(res, 200, await createWatch(JSON.parse(body || "{}"))); }
       catch (e) { send(res, 400, { error: e.message }); }
     });
     return;
   }
   if (req.url.startsWith("/watches/") && req.method === "DELETE") {
     const id = req.url.split("/")[2];
-    return send(res, 200, { deleted: deleteWatch(id) });
+    deleteWatch(id).then((d) => send(res, 200, { deleted: d })).catch((e) => send(res, 500, { error: e.message }));
+    return;
   }
   if (req.url === "/watches/run" && req.method === "POST") {
     const secret = process.env.WATCH_SECRET;

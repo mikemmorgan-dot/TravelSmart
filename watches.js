@@ -8,10 +8,13 @@
 //   ALERT_FROM      — sender, default "TravelSmart <onboarding@resend.dev>"
 //                     (Resend's test sender only delivers to YOUR Resend account email
 //                      until you verify a domain — fine for personal alerts.)
-//   WATCHES_FILE    — storage path, default ./data/watches.json
-//                     NOTE: Render free tier disk is ephemeral — watches survive sleeps
-//                     but NOT deploys/restarts. Re-create after a deploy, or move to a
-//                     persistent disk / KV if that gets old.
+//   GIST_ID + GITHUB_TOKEN — durable storage in a secret GitHub Gist (survives Render
+//                     deploys/restarts). Create a secret gist containing a file named
+//                     watches.json with content [] and a token with ONLY the gist scope.
+//                     Note: secret gists are unlisted, not encrypted — they hold the
+//                     alert email addresses, so use a throwaway gist, not a public one.
+//   WATCHES_FILE    — local-file fallback when GIST_ID is unset (dev only; ephemeral
+//                     on Render free tier — wiped by every deploy).
 //   WATCH_SECRET    — if set, POST /watches/run requires header x-watch-secret to match.
 const fs = require("fs");
 const path = require("path");
@@ -19,17 +22,40 @@ const path = require("path");
 const FILE = process.env.WATCHES_FILE || path.join(__dirname, "data", "watches.json");
 const COOLDOWN_MS = 12 * 60 * 60 * 1000; // don't re-email the same watch within 12h
 
-function load() {
+const GIST_ID = process.env.GIST_ID;
+const GH_TOKEN = process.env.GITHUB_TOKEN;
+const GH_HEADERS = () => ({
+  Authorization: `Bearer ${GH_TOKEN}`,
+  Accept: "application/vnd.github+json",
+  "User-Agent": "travelsmart-pricewatch",   // GitHub API rejects requests without one
+});
+
+async function load() {
+  if (GIST_ID && GH_TOKEN) {
+    const res = await fetch(`https://api.github.com/gists/${GIST_ID}`, { headers: GH_HEADERS() });
+    if (!res.ok) throw new Error(`gist read ${res.status}: ${await res.text()}`);
+    const j = await res.json();
+    const content = j.files?.["watches.json"]?.content;
+    try { return JSON.parse(content || "[]"); } catch { return []; }
+  }
   try { return JSON.parse(fs.readFileSync(FILE, "utf8")); } catch { return []; }
 }
-function save(list) {
+async function save(list) {
+  if (GIST_ID && GH_TOKEN) {
+    const res = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+      method: "PATCH", headers: { ...GH_HEADERS(), "Content-Type": "application/json" },
+      body: JSON.stringify({ files: { "watches.json": { content: JSON.stringify(list, null, 1) } } }),
+    });
+    if (!res.ok) throw new Error(`gist write ${res.status}: ${await res.text()}`);
+    return;
+  }
   fs.mkdirSync(path.dirname(FILE), { recursive: true });
   fs.writeFileSync(FILE, JSON.stringify(list, null, 1));
 }
 
 function listWatches() { return load(); }
 
-function createWatch(w) {
+async function createWatch(w) {
   for (const k of ["origin", "destination", "depart", "email", "targetPrice"])
     if (!w[k]) throw new Error(`missing ${k}`);
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(w.email)) throw new Error("invalid email");
@@ -46,16 +72,16 @@ function createWatch(w) {
     lastPrice: null, lastCheckedAt: null, lastNotifiedAt: null, lastNotifiedPrice: null,
     lastError: null,
   };
-  const list = load();
+  const list = await load();
   list.push(watch);
-  save(list);
+  await save(list);
   return watch;
 }
 
-function deleteWatch(id) {
-  const list = load();
+async function deleteWatch(id) {
+  const list = await load();
   const keep = list.filter((w) => w.id !== id);
-  save(keep);
+  await save(keep);
   return keep.length < list.length;
 }
 
@@ -94,7 +120,7 @@ function alertHtml(w, offer, appUrl) {
 
 // Re-price every watch. getFlights(params) must return { offers: [{price, taxes, validatingAirlines}, ...] }.
 async function runWatches(getFlights, appUrl) {
-  const list = load();
+  const list = await load();
   const summary = [];
   for (const w of list) {
     const item = { id: w.id, route: `${w.origin}→${w.destination}`, status: "checked" };
@@ -135,7 +161,7 @@ async function runWatches(getFlights, appUrl) {
     }
     summary.push(item);
   }
-  save(list);
+  await save(list);
   return summary;
 }
 
