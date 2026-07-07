@@ -79,7 +79,7 @@ async function searchOffers(p) {
       cabin_class: (p.travelClass || "economy").toLowerCase(), // accepts ECONOMY or economy
       slices,
       passengers: passengers(p.adults ?? 2, p.children ?? 0),
-      ...(p.nonStop ? { max_connections: 0 } : {}),
+      ...(p.nonStop ? { max_connections: 0 } : { max_connections: 2 }), // default is 1 — too strict for e.g. YYZ→FCO
     },
   };
 
