@@ -392,12 +392,100 @@ function WatchPanel({form}){
   );
 }
 
+// ---- Filters for the cash flight list. All client-side: the engine already sent every offer. ----
+const durMin=(d)=>{ const m=(d||"").match(/PT(?:(\d+)H)?(?:(\d+)M)?/); return m?(+m[1]||0)*60+(+m[2]||0):9e9; };
+const totalDur=(o)=>(o.itineraries||[]).reduce((t,s)=>t+durMin(s.duration),0);
+const depHour=(o,leg)=>{ const iso=o.itineraries?.[leg]?.segments?.[0]?.depart; return iso?+iso.slice(11,13):null; };
+const maxStops=(o)=>Math.max(...(o.itineraries||[{stops:0}]).map(s=>s.stops||0));
+const WINDOWS=[["early","before 8a",h=>h<8],["morning","8a–12p",h=>h>=8&&h<12],["afternoon","12–6p",h=>h>=12&&h<18],["evening","after 6p",h=>h>=18]];
+const inWindows=(sel,h)=>!sel.length||h==null||sel.some(k=>WINDOWS.find(w=>w[0]===k)[2](h));
+const SORTS=[["price","Cheapest"],["dur","Fastest"],["dep","Earliest out"]];
+
+function Chip({on,active,children,title}){
+  return <button onClick={on} title={title} style={{fontFamily:mono,fontSize:11,padding:"5px 10px",borderRadius:14,
+    cursor:"pointer",fontWeight:700,whiteSpace:"nowrap",
+    border:`1px solid ${active?PRIMARY:HAIR}`,background:active?PRIMARY:SURFACE,color:active?"#fff":INK}}>{children}</button>;
+}
+const FGroup=({label,children})=>(
+  <div style={{marginBottom:8}}>
+    <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase",marginBottom:4}}>{label}</div>
+    <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>{children}</div>
+  </div>
+);
+
+const FLT_DEFAULTS={sort:"price",stops:"any",airlines:[],maxPrice:null,outWin:[],retWin:[]};
+
+function FilterBar({offers,flt,setFlt,shownCount,hasReturn}){
+  // Airline facets with count + lowest price, cheapest-first so the useful chips lead.
+  const byAir=useMemo(()=>{
+    const m={};
+    for(const o of offers){ const c=o.validatingAirlines?.[0]||"—";
+      (m[c]??={code:c,n:0,min:Infinity}); m[c].n++; m[c].min=Math.min(m[c].min,o.price); }
+    return Object.values(m).sort((a,b)=>a.min-b.min);
+  },[offers]);
+  const lo=Math.min(...offers.map(o=>o.price)), hi=Math.max(...offers.map(o=>o.price));
+  const cap=flt.maxPrice??hi;
+  const upd=(patch)=>setFlt(f=>({...f,...patch}));
+  const togList=(key,v)=>upd({[key]:flt[key].includes(v)?flt[key].filter(x=>x!==v):[...flt[key],v]});
+  const dirty=flt.stops!=="any"||flt.airlines.length||flt.maxPrice!=null||flt.outWin.length||flt.retWin.length||flt.sort!=="price";
+  return (
+    <div style={{background:SURFACE,border:`1px solid ${HAIR}`,borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+      <FGroup label="Sort">
+        {SORTS.map(([k,l])=><Chip key={k} active={flt.sort===k} on={()=>upd({sort:k})}>{l}</Chip>)}
+      </FGroup>
+      <FGroup label="Stops">
+        {[["any","Any"],["0","Nonstop"],["1","≤ 1 stop"]].map(([k,l])=>
+          <Chip key={k} active={flt.stops===k} on={()=>upd({stops:k})}>{l}</Chip>)}
+      </FGroup>
+      <FGroup label="Airline · from">
+        {byAir.map(a=><Chip key={a.code} active={flt.airlines.includes(a.code)} on={()=>togList("airlines",a.code)}
+          title={airline(a.code)}>{a.code} {cad(a.min)} ({a.n})</Chip>)}
+      </FGroup>
+      <FGroup label={`Max price · ${cad(cap)}${flt.maxPrice==null?" (off)":""}`}>
+        <input type="range" min={Math.floor(lo)} max={Math.ceil(hi)} value={cap}
+          onChange={e=>upd({maxPrice:+e.target.value>=hi?null:+e.target.value})}
+          style={{width:"100%",maxWidth:340,accentColor:PRIMARY}}/>
+      </FGroup>
+      <FGroup label="Outbound departs">
+        {WINDOWS.map(([k,l])=><Chip key={k} active={flt.outWin.includes(k)} on={()=>togList("outWin",k)}>{l}</Chip>)}
+      </FGroup>
+      {hasReturn && (
+        <FGroup label="Return departs">
+          {WINDOWS.map(([k,l])=><Chip key={k} active={flt.retWin.includes(k)} on={()=>togList("retWin",k)}>{l}</Chip>)}
+        </FGroup>
+      )}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:2}}>
+        <span style={{fontFamily:mono,fontSize:11,color:MUTED}}>{shownCount} of {offers.length} shown</span>
+        {dirty && <button onClick={()=>setFlt(FLT_DEFAULTS)} style={{fontFamily:mono,fontSize:11,color:PRIMARY,
+          background:"none",border:"none",cursor:"pointer",fontWeight:700}}>reset filters</button>}
+      </div>
+    </div>
+  );
+}
+
 function FlightList({r,form}){
   const offers=r.offers||[];
   const pax=(Number(form.adults)||0)+(Number(form.children)||0)||1;
   const age=r._cacheAgeMs>60000?`cached ${Math.round(r._cacheAgeMs/60000)} min ago`:"live";
-  const [open,setOpen]=useState(null); // index of expanded card
+  const [open,setOpen]=useState(null); // index (into shown) of expanded card
+  const [flt,setFltRaw]=useState(FLT_DEFAULTS);
+  const setFlt=(v)=>{ setOpen(null); setFltRaw(v); }; // indices shift when filters change
   const toggle=(i)=>setOpen(o=>o===i?null:i);
+
+  const shown=useMemo(()=>{
+    let s=offers.filter(o=>
+      (flt.stops==="any"||maxStops(o)<=+flt.stops) &&
+      (!flt.airlines.length||flt.airlines.includes(o.validatingAirlines?.[0])) &&
+      (flt.maxPrice==null||o.price<=flt.maxPrice) &&
+      inWindows(flt.outWin,depHour(o,0)) &&
+      inWindows(flt.retWin,depHour(o,1))
+    );
+    if(flt.sort==="dur") s=[...s].sort((a,b)=>totalDur(a)-totalDur(b));
+    else if(flt.sort==="dep") s=[...s].sort((a,b)=>(depHour(a,0)??99)-(depHour(b,0)??99)||a.price-b.price);
+    else s=[...s].sort((a,b)=>a.price-b.price);
+    return s;
+  },[offers,flt]);
+  const cheapestShown=shown.length?Math.min(...shown.map(o=>o.price)):null;
   if(!offers.length) return (
     <Banner color={BEST} bg="#FBF3E7" bd="#EAD9BD">
       No offers returned{r.note?` — ${r.note}`:""}. ULCCs (e.g. Flair) aren't in the feed — check them directly.
@@ -411,16 +499,22 @@ function FlightList({r,form}){
         </h2>
         <span style={{fontFamily:mono,fontSize:10,color:MUTED}}>{age} · {r.currency}</span>
       </div>
-      {offers.map((o,i)=>(
+      <FilterBar offers={offers} flt={flt} setFlt={setFlt} shownCount={shown.length} hasReturn={!!form.return}/>
+      {!shown.length && (
+        <Banner color={BEST} bg="#FBF3E7" bd="#EAD9BD">
+          No flights match these filters — loosen one or hit reset.
+        </Banner>
+      )}
+      {shown.map((o,i)=>(
         <div key={i} role="button" tabIndex={0} aria-expanded={open===i}
           onClick={()=>toggle(i)}
           onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); toggle(i); } }}
-          style={{background:SURFACE,border:`1px solid ${i===0?BEST:HAIR}`,cursor:"pointer",
-          borderLeft:`4px solid ${i===0?BEST:HAIR}`,borderRadius:10,padding:"14px 16px",marginBottom:10}}>
+          style={{background:SURFACE,border:`1px solid ${o.price===cheapestShown?BEST:HAIR}`,cursor:"pointer",
+          borderLeft:`4px solid ${o.price===cheapestShown?BEST:HAIR}`,borderRadius:10,padding:"14px 16px",marginBottom:10}}>
           <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:12,alignItems:"flex-start"}}>
             <div style={{flex:"1 1 240px",minWidth:240}}>
               <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
-                {i===0 && <span style={{fontFamily:mono,fontSize:9,letterSpacing:"0.1em",color:"#fff",background:BEST,padding:"2px 6px",borderRadius:3}}>CHEAPEST</span>}
+                {o.price===cheapestShown && <span style={{fontFamily:mono,fontSize:9,letterSpacing:"0.1em",color:"#fff",background:BEST,padding:"2px 6px",borderRadius:3}}>CHEAPEST</span>}
                 <span style={{fontWeight:800,fontSize:15}}>{airline(o.validatingAirlines?.[0])}</span>
                 {r._routes?.length>1&&o._route&&<span style={{fontFamily:mono,fontSize:10,fontWeight:700,color:INK,background:PAPER,border:`1px solid ${HAIR}`,borderRadius:3,padding:"1px 5px"}}>{o._route}</span>}
                 {o.cabin && <span style={{fontFamily:mono,fontSize:10,color:MUTED}}>{o.cabin.replace("_"," ")}</span>}
@@ -432,7 +526,7 @@ function FlightList({r,form}){
               </div>
             </div>
             <div style={{textAlign:"right",flexShrink:0,marginLeft:"auto"}}>
-              <div style={{fontFamily:mono,fontSize:24,fontWeight:800,color:i===0?POS:INK}}>{cad(o.price)}</div>
+              <div style={{fontFamily:mono,fontSize:24,fontWeight:800,color:o.price===cheapestShown?POS:INK}}>{cad(o.price)}</div>
               <div style={{fontFamily:mono,fontSize:11,color:MUTED,whiteSpace:"nowrap"}}>{cad(o.price/pax)}/person · taxes {cad(o.taxes)}</div>
               <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,marginTop:4,textTransform:"uppercase"}}>
                 {open===i?"▴ hide details":"▾ details"}
