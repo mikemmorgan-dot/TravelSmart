@@ -1,6 +1,16 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { AIRPORTS } from "./airports";
 
+const API_BASE = ""; // same origin — server serves UI + API
+
+const INK="#15181E", MUTED="#6B7280", HAIR="#DCDFE4", PAPER="#E9EBEE", SURFACE="#FFFFFF";
+const PRIMARY="#2E2BD6", BEST="#B45309", POS="#0B7A4B";
+const mono='"SF Mono","JetBrains Mono","Roboto Mono",Menlo,monospace';
+const sans='"Inter",system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif';
+
+const cad=(n)=>"$"+Math.round(n).toLocaleString("en-CA");
+const fmt=(n)=>Math.round(n).toLocaleString("en-CA");
+
 // ---- Airport typeahead: type a city, airport name, or code; pick from matches ----
 function searchAirports(q){
   q=q.trim().toLowerCase();
@@ -93,15 +103,6 @@ function AirportField({v,on}){
    In this preview it can't reach your localhost backend, so it shows a labelled SAMPLE.
    Set API_BASE to your deployed engine to go live. */
 
-const API_BASE = ""; // same origin — server serves UI + API
-
-const INK="#15181E", MUTED="#6B7280", HAIR="#DCDFE4", PAPER="#E9EBEE", SURFACE="#FFFFFF";
-const PRIMARY="#2E2BD6", BEST="#B45309", POS="#0B7A4B";
-const mono='"SF Mono","JetBrains Mono","Roboto Mono",Menlo,monospace';
-const sans='"Inter",system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif';
-
-const cad=(n)=>"$"+Math.round(n).toLocaleString("en-CA");
-const fmt=(n)=>Math.round(n).toLocaleString("en-CA");
 
 // Labelled sample so the preview renders the real output shape (NOT live data).
 const SAMPLE = {
