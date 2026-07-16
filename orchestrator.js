@@ -98,22 +98,31 @@ async function optimizeTrip(cfg, deps) {
   const pairs = [];
   for (const dep of deps_dates) for (const ret of ret_dates) if (ret >= dep) pairs.push({ dep, ret });
 
-  const CONCURRENCY = 8;
+  const CONCURRENCY = 3; // duffelClient spaces request starts globally; this just overlaps supplier wait
   const cashResults = new Array(pairs.length);
   let next = 0;
+  let lastErr = null;
   async function worker() {
     while (next < pairs.length) {
       const i = next++;
       const { dep, ret } = pairs[i];
-      cashResults[i] = await getCash(origin, destination, dep, ret, cabin, party);
+      try {
+        cashResults[i] = await getCash(origin, destination, dep, ret, cabin, party);
+      } catch (e) {
+        lastErr = e;
+        console.warn(`cash sweep pair ${dep}→${ret} failed: ${e.message}`);
+        cashResults[i] = null; // drop this pair, keep the sweep alive
+      }
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pairs.length) }, worker));
+  if (cashResults.every((c) => c == null)) throw lastErr || new Error("cash sweep returned nothing");
   const cashCalls = pairs.length;
 
   const grid = [];
   pairs.forEach(({ dep, ret }, i) => {
     const cash = cashResults[i];
+    if (!cash) return; // pair's cash call failed after retries — omit from grid
     const outC = legCandidates(outboundByDate[dep] || [], { balances, valuations, awardTax, cheapestFunding, asOf, pax });
     const inC = legCandidates(returnByDate[ret] || [], { balances, valuations, awardTax, cheapestFunding, asOf, pax });
     const sol = solveRoundTrip(outC, inC, balances);

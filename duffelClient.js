@@ -69,6 +69,48 @@ function normalizeOffer(o) {
   };
 }
 
+// --- Rate limiting -----------------------------------------------------------
+// Duffel throttles per token. Two defences:
+// 1) A global spacer so concurrent sweeps don't burst-fire requests.
+// 2) On 429, wait for the ratelimit-reset / retry-after the API tells us, then retry.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const GAP_MS = Number(process.env.DUFFEL_GAP_MS || 700); // min gap between request starts
+let lastStart = 0;
+let chain = Promise.resolve();
+function spaced() {
+  const p = chain.then(async () => {
+    const wait = lastStart + GAP_MS - Date.now();
+    if (wait > 0) await sleep(wait);
+    lastStart = Date.now();
+  });
+  chain = p.catch(() => {});
+  return p;
+}
+function retryDelayMs(res, attempt) {
+  const ra = Number(res.headers.get("retry-after"));
+  if (ra > 0) return Math.min(ra * 1000, 30000);
+  const reset = res.headers.get("ratelimit-reset"); // may be a date or seconds
+  if (reset) {
+    const asDate = Date.parse(reset);
+    if (!Number.isNaN(asDate)) return Math.min(Math.max(asDate - Date.now(), 1000), 30000);
+    if (Number(reset) > 0) return Math.min(Number(reset) * 1000, 30000);
+  }
+  return Math.min(1500 * 2 ** attempt + Math.random() * 500, 30000); // fallback backoff
+}
+async function duffelFetch(url, opts) {
+  for (let attempt = 0; ; attempt++) {
+    await spaced();
+    const res = await fetch(url, opts);
+    if (res.status === 429 && attempt < 3) {
+      const wait = retryDelayMs(res, attempt);
+      console.warn(`Duffel 429 — retrying in ${Math.round(wait / 1000)}s (attempt ${attempt + 1}/3)`);
+      await sleep(wait);
+      continue;
+    }
+    return res;
+  }
+}
+
 // Round-trip = two slices. Returns offers sorted cheapest-first.
 async function searchOffers(p) {
   const slices = [{ origin: p.origin, destination: p.destination, departure_date: p.departureDate }];
@@ -83,7 +125,7 @@ async function searchOffers(p) {
     },
   };
 
-  const res = await fetch(`${BASE}/air/offer_requests?return_offers=true&supplier_timeout=15000`, {
+  const res = await duffelFetch(`${BASE}/air/offer_requests?return_offers=true&supplier_timeout=15000`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json", Accept: "application/json",
