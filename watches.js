@@ -30,10 +30,23 @@ const GH_HEADERS = () => ({
   "User-Agent": "travelsmart-pricewatch",   // GitHub API rejects requests without one
 });
 
+// GitHub's API occasionally throws transient 5xx (HTML error pages). Retry a few times
+// before giving up, and truncate error bodies so one blip doesn't produce pages of logs.
+async function ghFetch(label, url, opts) {
+  let last;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 2000 * attempt));
+    const res = await fetch(url, opts);
+    if (res.ok) return res;
+    const body = (await res.text()).replace(/\s+/g, " ").slice(0, 200);
+    last = new Error(`${label} ${res.status}: ${body}`);
+    if (res.status < 500) break; // 4xx is config, not weather — don't retry
+  }
+  throw last;
+}
 async function load() {
   if (GIST_ID && GH_TOKEN) {
-    const res = await fetch(`https://api.github.com/gists/${GIST_ID}`, { headers: GH_HEADERS() });
-    if (!res.ok) throw new Error(`gist read ${res.status}: ${await res.text()}`);
+    const res = await ghFetch("gist read", `https://api.github.com/gists/${GIST_ID}`, { headers: GH_HEADERS() });
     const j = await res.json();
     const content = j.files?.["watches.json"]?.content;
     try { return JSON.parse(content || "[]"); } catch { return []; }
@@ -42,11 +55,10 @@ async function load() {
 }
 async function save(list) {
   if (GIST_ID && GH_TOKEN) {
-    const res = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
+    await ghFetch("gist write", `https://api.github.com/gists/${GIST_ID}`, {
       method: "PATCH", headers: { ...GH_HEADERS(), "Content-Type": "application/json" },
       body: JSON.stringify({ files: { "watches.json": { content: JSON.stringify(list, null, 1) } } }),
     });
-    if (!res.ok) throw new Error(`gist write ${res.status}: ${await res.text()}`);
     return;
   }
   fs.mkdirSync(path.dirname(FILE), { recursive: true });
