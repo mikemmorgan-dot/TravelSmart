@@ -10,6 +10,47 @@ const sans='"Inter",system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-seri
 
 const cad=(n)=>"$"+Math.round(n).toLocaleString("en-CA");
 const fmt=(n)=>Math.round(n).toLocaleString("en-CA");
+// Duffel quotes in the account's billing currency — label anything non-CAD honestly.
+const money=(n,cur)=>(cur==="USD"?"US$":cur&&cur!=="CAD"?cur+" ":"$")+Math.round(n).toLocaleString("en-CA");
+
+// ---- "Points needed by program" — every program's price for this pair, funded or not ----
+function ByProgram({rows,balances,cur}){
+  if(!rows?.length) return null;
+  return (
+    <div style={{marginTop:14,borderTop:`1px solid ${HAIR}`,paddingTop:12}}>
+      <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase",marginBottom:8}}>
+        Points needed by program · whole party · round trip
+      </div>
+      {rows.map((p)=>(
+        <div key={p.program} style={{display:"flex",justifyContent:"space-between",gap:10,flexWrap:"wrap",
+          padding:"7px 0",borderBottom:`1px solid ${PAPER}`}}>
+          <div style={{minWidth:150}}>
+            <span style={{fontWeight:700,fontSize:13.5}}>{p.program}</span>
+            {p.estimated&&<span style={{fontFamily:mono,fontSize:10,color:BEST}}> [est]</span>}
+            {p.funding&&(
+              <div style={{fontFamily:mono,fontSize:10.5,color:MUTED,marginTop:1}}>
+                {p.funding.source===p.program?"from your balance":`${fmt(p.funding.sourcePts)} via ${p.funding.source}${p.funding.via?` (${p.funding.via})`:""}`}
+                {p.funding.short>0&&<span style={{color:"#B42318",fontWeight:700}}> · short {fmt(p.funding.short)}</span>}
+              </div>
+            )}
+          </div>
+          <div style={{textAlign:"right",fontFamily:mono}}>
+            {p.roundTrip?(
+              <>
+                <div style={{fontSize:15,fontWeight:800}}>{fmt(p.totalPts)} <span style={{fontSize:10,color:MUTED}}>pts</span></div>
+                <div style={{fontSize:10.5,color:MUTED}}>{fmt(p.outPts)} out · {fmt(p.retPts)} ret · + {money(p.taxes,cur)} taxes</div>
+              </>
+            ):(
+              <div style={{fontSize:11,color:MUTED,paddingTop:4}}>
+                {p.outPts!=null?`outbound only · ${fmt(p.outPts)} pts`:`return only · ${fmt(p.retPts)} pts`}
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // ---- Airport typeahead: type a city, airport name, or code; pick from matches ----
 function searchAirports(q){
@@ -161,17 +202,24 @@ export default function TripOptimizer(){
     catch{ return `engine ${res.status}`; }
   }
 
-  async function runCash(){
-    setState({status:"loading", kind:"flights", data:null, sample:false, err:null});
+  const [pairLoading,setPairLoading]=useState(false);
+
+  async function runCash(overrideDates){
+    const dep=overrideDates?.dep||form.depart, ret=overrideDates?.ret||form.return;
+    const keepGrid=overrideDates?state.data?.grid:null;      // date-pair tap: keep the sweep grid
+    const flex=overrideDates?0:Number(form.flexDays)||0;     // sweep only on a fresh search
+    overrideDates?setPairLoading(true)
+      :setState({status:"loading", kind:"flights", data:null, sample:false, err:null});
     const origins=String(form.origin).split(",").filter(Boolean);
     const dests=String(form.destination).split(",").filter(Boolean);
     const combos=[];
     for(const o of origins) for(const d of dests) if(combos.length<6) combos.push([o,d]);
     try{
-      const settled=await Promise.allSettled(combos.map(([o,d])=>
+      const settled=await Promise.allSettled(combos.map(([o,d],idx)=>
         fetch(`${API_BASE}/flights`,{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({ origin:o, destination:d, departureDate:form.depart, returnDate:form.return,
-            adults:Number(form.adults), children:Number(form.children), travelClass:form.cabin })})
+          body:JSON.stringify({ origin:o, destination:d, departureDate:dep, returnDate:ret,
+            adults:Number(form.adults), children:Number(form.children), travelClass:form.cabin,
+            flexDays: idx===0?flex:0 })})                     // sweep the primary route only
           .then(async res=>{ if(!res.ok) throw new Error(await errText(res)); return res.json(); })
           .then(j=>({...j, _route:`${o}→${d}`}))));
       const oks=settled.filter(s=>s.status==="fulfilled").map(s=>s.value);
@@ -179,12 +227,14 @@ export default function TripOptimizer(){
       const offers=oks.flatMap(r=>(r.offers||[]).map(o=>({...o,_route:r._route})))
         .sort((a,b)=>a.price-b.price);
       const merged={ ...oks[0], offers, _routes:combos.map(c=>c.join("→")),
+        grid: keepGrid||oks[0].grid||null, _gridRoute: combos[0].join("→"),
+        _pair:{dep,ret},
         _cacheAgeMs:Math.max(...oks.map(r=>r._cacheAgeMs||0)),
         note:oks.length<combos.length?`${combos.length-oks.length} route(s) failed`:oks[0].note };
       setState({status:"done", kind:"flights", data:merged, sample:false, err:null});
     }catch(e){
-      setState({status:"done", kind:"flights", data:null, sample:false, err:e.message});
-    }
+      if(!overrideDates) setState({status:"done", kind:"flights", data:null, sample:false, err:e.message});
+    }finally{ setPairLoading(false); }
   }
 
   async function run(){
@@ -240,7 +290,7 @@ export default function TripOptimizer(){
               <Field label="Cabin"><Sel v={form.cabin} on={v=>upd("cabin",v)} opts={["economy","business"]}/></Field></Row>
             <Row><Field label="Depart"><In type="date" v={form.depart} on={v=>upd("depart",v)} w={140}/></Field>
               <Field label="Return"><In type="date" v={form.return} on={v=>upd("return",v)} w={140}/></Field></Row>
-            <Row>{mode==="optimize" && <Field label="Flex ±days"><Sel v={form.flexDays} on={v=>upd("flexDays",v)} opts={["0","1","2","3"]}/></Field>}
+            <Row><Field label="Flex ±days"><Sel v={form.flexDays} on={v=>upd("flexDays",v)} opts={["0","1","2","3"]}/></Field>
               <Field label="Adults"><In type="number" v={form.adults} on={v=>upd("adults",v)} w={56}/></Field>
               <Field label="Children"><In type="number" v={form.children} on={v=>upd("children",v)} w={56}/></Field></Row>
             {mode==="cash" && (
@@ -278,7 +328,7 @@ export default function TripOptimizer(){
           </Banner>
         )}
 
-        {state.kind==="flights" && state.data && <FlightList r={state.data} form={form}/>}
+        {state.kind==="flights" && state.data && <FlightList r={state.data} form={form} onPickPair={(dep,ret)=>runCash({dep,ret})} pairLoading={pairLoading}/>}
         {state.kind==="optimize" && state.data && <Results r={state.data} balances={balances} form={form}/>}
         <WatchPanel form={form}/>
         {state.status==="idle" && <Empty/>}
@@ -415,7 +465,7 @@ const FGroup=({label,children})=>(
 
 const FLT_DEFAULTS={sort:"price",stops:"any",airlines:[],maxPrice:null,outWin:[],retWin:[]};
 
-function FilterBar({offers,flt,setFlt,shownCount,hasReturn}){
+function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
   // Airline facets with count + lowest price, cheapest-first so the useful chips lead.
   const byAir=useMemo(()=>{
     const m={};
@@ -439,9 +489,9 @@ function FilterBar({offers,flt,setFlt,shownCount,hasReturn}){
       </FGroup>
       <FGroup label="Airline · from">
         {byAir.map(a=><Chip key={a.code} active={flt.airlines.includes(a.code)} on={()=>togList("airlines",a.code)}
-          title={airline(a.code)}>{a.code} {cad(a.min)} ({a.n})</Chip>)}
+          title={airline(a.code)}>{a.code} {money(a.min,cur)} ({a.n})</Chip>)}
       </FGroup>
-      <FGroup label={`Max price · ${cad(cap)}${flt.maxPrice==null?" (off)":""}`}>
+      <FGroup label={`Max price · ${money(cap,cur)}${flt.maxPrice==null?" (off)":""}`}>
         <input type="range" min={Math.floor(lo)} max={Math.ceil(hi)} value={cap}
           onChange={e=>upd({maxPrice:+e.target.value>=hi?null:+e.target.value})}
           style={{width:"100%",maxWidth:340,accentColor:PRIMARY}}/>
@@ -463,7 +513,55 @@ function FilterBar({offers,flt,setFlt,shownCount,hasReturn}){
   );
 }
 
-function FlightList({r,form}){
+// ---- Flex window for cash: cheapest cash fare per date pair; tap a cell to load its flights ----
+function CashMatrix({grid,sel,onSel,route,loading}){
+  const deps=[...new Set(grid.map(g=>g.dep))].sort();
+  const rets=[...new Set(grid.map(g=>g.ret))].sort();
+  const by={}; grid.forEach(g=>by[g.dep+"|"+g.ret]=g);
+  const prices=grid.map(g=>g.price); const lo=Math.min(...prices), hi=Math.max(...prices);
+  const shade=(p)=>{ const t=hi===lo?0:(p-lo)/(hi-lo); return `hsl(75,${28-18*t}%,${52+28*t}%)`; };
+  const md=(d)=>d.slice(5);
+  return (
+    <div style={{marginBottom:14,opacity:loading?0.55:1,transition:"opacity 0.2s"}}>
+      <div style={{fontFamily:mono,fontSize:11,letterSpacing:"0.12em",color:MUTED,textTransform:"uppercase",marginBottom:8}}>
+        Flex window · cheapest cash per date pair{route?` · ${route}`:""}{loading?" · loading…":""}
+      </div>
+      <div style={{overflowX:"auto"}}>
+        <table style={{borderCollapse:"separate",borderSpacing:4,fontFamily:mono}}>
+          <thead><tr><th/>{rets.map(rt=><th key={rt} style={{fontSize:10,color:MUTED,fontWeight:600,padding:"0 2px"}}>{md(rt)}</th>)}</tr></thead>
+          <tbody>
+            {deps.map(dp=>(
+              <tr key={dp}>
+                <td style={{fontSize:10,color:MUTED,paddingRight:4}}>{md(dp)}</td>
+                {rets.map(rt=>{
+                  const g=by[dp+"|"+rt];
+                  if(!g) return <td key={rt}/>;
+                  const isSel=sel&&sel.dep===dp&&sel.ret===rt;
+                  const isLo=g.price===lo;
+                  return (
+                    <td key={rt}>
+                      <button onClick={()=>!loading&&onSel(dp,rt)} disabled={loading}
+                        style={{fontFamily:mono,fontSize:12,fontWeight:700,padding:"8px 6px",minWidth:64,
+                          borderRadius:7,cursor:loading?"wait":"pointer",background:shade(g.price),color:INK,
+                          border:`2px solid ${isSel?PRIMARY:isLo?BEST:"transparent"}`}}>
+                        {money(g.price,g.currency)}
+                      </button>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{fontFamily:mono,fontSize:10,color:MUTED,marginTop:4}}>
+        amber ring = cheapest · blue ring = shown below · greener = cheaper · tap a pair to load its flights
+      </div>
+    </div>
+  );
+}
+
+function FlightList({r,form,onPickPair,pairLoading}){
   const offers=r.offers||[];
   const pax=(Number(form.adults)||0)+(Number(form.children)||0)||1;
   const age=r._cacheAgeMs>60000?`cached ${Math.round(r._cacheAgeMs/60000)} min ago`:"live";
@@ -495,11 +593,14 @@ function FlightList({r,form}){
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",flexWrap:"wrap",gap:8,margin:"4px 0 12px"}}>
         <h2 style={{fontSize:12,fontFamily:mono,letterSpacing:"0.14em",textTransform:"uppercase",color:MUTED,margin:0}}>
-          {offers.length} option{offers.length!==1?"s":""} · {form.origin} ⇄ {form.destination} · total for {pax} traveller{pax>1?"s":""}
+          {offers.length} option{offers.length!==1?"s":""} · {form.origin} ⇄ {form.destination}{r._pair?` · ${r._pair.dep} → ${r._pair.ret}`:""} · total for {pax} traveller{pax>1?"s":""}
         </h2>
         <span style={{fontFamily:mono,fontSize:10,color:MUTED}}>{age} · {r.currency}</span>
       </div>
-      <FilterBar offers={offers} flt={flt} setFlt={setFlt} shownCount={shown.length} hasReturn={!!form.return}/>
+      {r.grid&&r.grid.length>1&&(
+        <CashMatrix grid={r.grid} sel={r._pair} onSel={onPickPair} route={r._gridRoute} loading={pairLoading}/>
+      )}
+      <FilterBar offers={offers} flt={flt} setFlt={setFlt} shownCount={shown.length} hasReturn={!!form.return} cur={r.currency}/>
       {!shown.length && (
         <Banner color={BEST} bg="#FBF3E7" bd="#EAD9BD">
           No flights match these filters — loosen one or hit reset.
@@ -526,8 +627,8 @@ function FlightList({r,form}){
               </div>
             </div>
             <div style={{textAlign:"right",flexShrink:0,marginLeft:"auto"}}>
-              <div style={{fontFamily:mono,fontSize:24,fontWeight:800,color:o.price===cheapestShown?POS:INK}}>{cad(o.price)}</div>
-              <div style={{fontFamily:mono,fontSize:11,color:MUTED,whiteSpace:"nowrap"}}>{cad(o.price/pax)}/person · taxes {cad(o.taxes)}</div>
+              <div style={{fontFamily:mono,fontSize:24,fontWeight:800,color:o.price===cheapestShown?POS:INK}}>{money(o.price,r.currency)}</div>
+              <div style={{fontFamily:mono,fontSize:11,color:MUTED,whiteSpace:"nowrap"}}>{money(o.price/pax,r.currency)}/person · taxes {money(o.taxes,r.currency)}</div>
               <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,marginTop:4,textTransform:"uppercase"}}>
                 {open===i?"▴ hide details":"▾ details"}
               </div>
@@ -617,7 +718,7 @@ function Results({r,balances,form}){
             <span style={{fontFamily:mono,fontSize:10,letterSpacing:"0.12em",color:"#fff",background:BEST,padding:"2px 7px",borderRadius:3}}>CHEAPEST</span>
             <div style={{fontSize:22,fontWeight:800,marginTop:8}}>{b.dep} → {b.ret}</div>
             <div style={{color:MUTED,fontSize:13,marginTop:2}}>
-              {w==="cash"?"Pay cash":w==="award"?"Use points":"Split: cash one way, points the other"} · cash if paid {cad(b.cash.price)}
+              {w==="cash"?"Pay cash":w==="award"?"Use points":"Split: cash one way, points the other"} · cash if paid {money(b.cash.price,b.cash.currency)}
             </div>
           </div>
           <div style={{textAlign:"right"}}>
@@ -650,6 +751,7 @@ function Results({r,balances,form}){
             </div>
           </div>
         )}
+        <ByProgram rows={b.byProgram} balances={balances} cur={b.cash.currency}/>
       </div>
 
       <Matrix grid={r.grid} sel={sel} onSel={(k)=>setSel(s=>s===k?null:k)}/>
@@ -682,8 +784,8 @@ function PairDetail({g,balances,O,D,pax}){
       <div style={{display:"flex",flexWrap:"wrap",gap:10}}>
         <div style={{...col,borderColor:g.winner==="cash"?POS:HAIR,borderLeft:`4px solid ${g.winner==="cash"?POS:HAIR}`}}>
           <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>Cash{g.winner==="cash"?" · winner":""}</div>
-          <div style={{fontFamily:mono,fontSize:22,fontWeight:800,marginTop:4}}>{cad(g.cash.price)}</div>
-          <div style={{fontFamily:mono,fontSize:11,color:MUTED}}>whole party, all-in{g.cash.taxes?` · taxes ${cad(g.cash.taxes)}`:""}</div>
+          <div style={{fontFamily:mono,fontSize:22,fontWeight:800,marginTop:4}}>{money(g.cash.price,g.cash.currency)}</div>
+          <div style={{fontFamily:mono,fontSize:11,color:MUTED}}>whole party, all-in{g.cash.taxes?` · taxes ${money(g.cash.taxes,g.cash.currency)}`:""}</div>
           <a href={`https://www.google.com/travel/flights?q=${encodeURIComponent(`Flights from ${O} to ${D} on ${g.dep} through ${g.ret}`)}`}
             target="_blank" rel="noopener noreferrer" style={VERIFY_STYLE}>Google Flights ↗</a>
         </div>
@@ -734,6 +836,7 @@ function PairDetail({g,balances,O,D,pax}){
           )}
         </div>
       </div>
+      <ByProgram rows={g.byProgram} balances={balances} cur={g.cash.currency}/>
       <div style={{fontFamily:mono,fontSize:10,color:MUTED,marginTop:8}}>
         Points are for all travellers. Programs don't let you split one ticket between points and cash here — it's one or the other per ticket (taxes are always cash).
       </div>
