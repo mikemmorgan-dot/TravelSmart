@@ -97,6 +97,17 @@ async function optimizeTrip(cfg, deps) {
   // browser (~60s) and proxy (~100s) timeouts — so run with bounded concurrency instead.
   const pairs = [];
   for (const dep of deps_dates) for (const ret of ret_dates) if (ret >= dep) pairs.push({ dep, ret });
+  // Target dates first, nearest neighbours next: if the time budget cuts the sweep short,
+  // only the least relevant far corners are deferred.
+  const dist = (p) => Math.abs(Date.parse(p.dep) - Date.parse(target.depart))
+                    + Math.abs(Date.parse(p.ret) - Date.parse(target.return));
+  pairs.sort((a, b) => dist(a) - dist(b));
+
+  // Answer fast: sweep synchronously only up to the budget, then finish the rest in the
+  // background AFTER responding (results land in the cache; the UI auto-refreshes to pick
+  // them up). Mobile Safari's ~60s fetch limit never comes near.
+  const deadline = Date.now() + (Number(process.env.OPTIMIZE_BUDGET_MS) || 15000);
+  const deferred = [];
 
   const CONCURRENCY = 3; // duffelClient spaces request starts globally; this just overlaps supplier wait
   const cashResults = new Array(pairs.length);
@@ -106,6 +117,7 @@ async function optimizeTrip(cfg, deps) {
     while (next < pairs.length) {
       const i = next++;
       const { dep, ret } = pairs[i];
+      if (Date.now() > deadline) { deferred.push(pairs[i]); cashResults[i] = null; continue; }
       try {
         cashResults[i] = await getCash(origin, destination, dep, ret, cabin, party);
       } catch (e) {
@@ -116,7 +128,20 @@ async function optimizeTrip(cfg, deps) {
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pairs.length) }, worker));
-  if (cashResults.every((c) => c == null)) throw lastErr || new Error("cash sweep returned nothing");
+  if (cashResults.every((c) => c == null) && !deferred.length) throw lastErr || new Error("cash sweep returned nothing");
+
+  // Fire-and-forget: warm the cache for deferred pairs so the auto-refresh finds them.
+  if (deferred.length && !globalThis.__tsBgSweep) {
+    globalThis.__tsBgSweep = true;
+    (async () => {
+      try {
+        for (const { dep, ret } of deferred) {
+          try { await getCash(origin, destination, dep, ret, cabin, party); } catch {}
+        }
+        console.log(`[bg-sweep] finished ${deferred.length} deferred pairs`);
+      } finally { globalThis.__tsBgSweep = false; }
+    })();
+  }
   const cashCalls = pairs.length;
 
   const grid = [];
@@ -144,7 +169,7 @@ async function optimizeTrip(cfg, deps) {
   });
 
   grid.sort((a, b) => a.bestEcon - b.bestEcon);
-  return { best: grid[0], grid, cashCalls, aviosNote: avios.note };
+  return { best: grid[0], grid, cashCalls, aviosNote: avios.note, partial: deferred.length };
 }
 
 // "What would this trip cost in each program?" — unfiltered by balances, so the user sees

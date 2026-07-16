@@ -1,0 +1,28 @@
+name: price-watch
+on:
+  schedule:
+    - cron: "23 3,9,15,21 * * *"   # every 6h (UTC); odd minute avoids GH's busy :00 window
+  workflow_dispatch: {}             # manual "Run workflow" button for testing
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake the instance
+        # Render free tier spins down when idle; poking /health first absorbs the
+        # cold start so the real trigger below never races it. Never fails the job.
+        run: |
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 \
+              "https://travelsmart-iclz.onrender.com/health" || true)
+            echo "wake attempt $i -> HTTP $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 15
+          done
+          echo "instance never woke — letting the trigger step report the real error"
+
+      - name: Trigger watch run
+        run: |
+          curl -sS -X POST "https://travelsmart-iclz.onrender.com/watches/run" \
+            -H "x-watch-secret: ${{ secrets.WATCH_SECRET }}" \
+            --max-time 180 --retry 2 --retry-delay 20 --fail-with-body

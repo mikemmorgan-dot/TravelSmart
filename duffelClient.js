@@ -74,7 +74,7 @@ function normalizeOffer(o) {
 // 1) A global spacer so concurrent sweeps don't burst-fire requests.
 // 2) On 429, wait for the ratelimit-reset / retry-after the API tells us, then retry.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const GAP_MS = Number(process.env.DUFFEL_GAP_MS || 700); // min gap between request starts
+const GAP_MS = Number(process.env.DUFFEL_GAP_MS || 350); // min gap between request starts; 429-retry is the safety net
 let lastStart = 0;
 let chain = Promise.resolve();
 function spaced() {
@@ -135,7 +135,8 @@ async function searchOffers(p) {
   });
   if (!res.ok) throw new Error(`Duffel ${res.status}: ${(await res.text()).slice(0, 400)}`);
   const json = await res.json();
-  const offers = (json.data?.offers || []).map(normalizeOffer).sort((a, b) => a.price - b.price);
+  const offers = (json.data?.offers || []).map(normalizeOffer).sort((a, b) => a.price - b.price)
+    .slice(0, Number(process.env.MAX_OFFERS || 300)); // cap payload/cache size; UI never needs more
   return { currency: offers[0]?.currency || p.currencyCode || "CAD", offers, count: offers.length };
 }
 

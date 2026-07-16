@@ -136,6 +136,7 @@ const server = http.createServer((req, res) => {
         // Light calls (cashBaseline) with bounded concurrency; duffelClient spaces/retries globally.
         // Failed pairs are dropped, not fatal — the anchor's full list already succeeded.
         let grid = null;
+        let gridPartial = 0;
         const flex = Math.min(Math.max(Number(p.flexDays) || 0, 0), 3);
         if (flex > 0 && p.returnDate) {
           const party = { adults: anchor.adults, children: anchor.children };
@@ -143,12 +144,20 @@ const server = http.createServer((req, res) => {
           for (const dep of genDates(p.departureDate, flex))
             for (const ret of genDates(p.returnDate, flex))
               if (ret >= dep) pairs.push({ dep, ret });
+          // Anchor dates first, nearest neighbours next; budget keeps the response fast and
+          // a background pass finishes the far corners into the cache.
+          const dist = (x) => Math.abs(Date.parse(x.dep) - Date.parse(p.departureDate))
+                            + Math.abs(Date.parse(x.ret) - Date.parse(p.returnDate));
+          pairs.sort((a, b) => dist(a) - dist(b));
+          const deadline = Date.now() + (Number(process.env.FLEX_BUDGET_MS) || 15000);
+          const deferred = [];
           const out = new Array(pairs.length);
           let next = 0;
           const worker = async () => {
             while (next < pairs.length) {
               const i = next++;
               const { dep, ret } = pairs[i];
+              if (Date.now() > deadline) { deferred.push(pairs[i]); out[i] = null; continue; }
               try {
                 const c = await cashCached(anchor.origin, anchor.destination, dep, ret, anchor.travelClass, party);
                 out[i] = { dep, ret, price: c.value.price, currency: c.value.currency };
@@ -160,8 +169,21 @@ const server = http.createServer((req, res) => {
           };
           await Promise.all(Array.from({ length: Math.min(3, pairs.length) }, worker));
           grid = out.filter((g) => g && g.price != null);
+          gridPartial = deferred.length;
+          if (deferred.length && !globalThis.__tsBgFlex) {
+            globalThis.__tsBgFlex = true;
+            (async () => {
+              try {
+                for (const { dep, ret } of deferred) {
+                  try { await cashCached(anchor.origin, anchor.destination, dep, ret, anchor.travelClass, party); } catch {}
+                }
+                console.log(`[bg-flex] finished ${deferred.length} deferred pairs`);
+              } finally { globalThis.__tsBgFlex = false; }
+            })();
+          }
         }
-        send(res, 200, { ...r.value, grid, flexDays: flex, _cacheAgeMs: r.cache.ageMs, _fresh: !r.cache.hit });
+        send(res, 200, { ...r.value, grid, flexDays: flex, gridPartial,
+          _cacheAgeMs: r.cache.ageMs, _fresh: !r.cache.hit });
       } catch (e) {
         console.error("FLIGHTS ERROR:", e.stack || e.message);
         send(res, 500, { error: e.message });
