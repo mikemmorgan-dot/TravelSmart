@@ -2,7 +2,7 @@
 //   export SEATS_AERO_KEY=... AMADEUS_CLIENT_ID=... AMADEUS_CLIENT_SECRET=... AMADEUS_ENV=production
 //   node server.js                 # listens on :8787
 const http = require("http");
-const { optimizeTrip } = require("./orchestrator");
+const { optimizeTrip, genDates } = require("./orchestrator");
 const { cheapestFunding, aviosEstimate } = require("./transferGraph");
 const { Cache, wrap, TTL } = require("./cache");
 const { search } = require("./seatsAeroClient");
@@ -124,13 +124,44 @@ const server = http.createServer((req, res) => {
         const p = JSON.parse(body || "{}");
         for (const k of ["origin", "destination", "departureDate"])
           if (!p[k]) throw new Error(`missing ${k}`);
-        const r = await flightsCached({
+        const anchor = {
           origin: p.origin, destination: p.destination,
           departureDate: p.departureDate, returnDate: p.returnDate,
           adults: p.adults ?? 2, children: p.children ?? 0,
           travelClass: p.travelClass || "economy",
-        });
-        send(res, 200, { ...r.value, _cacheAgeMs: r.cache.ageMs, _fresh: !r.cache.hit });
+        };
+        const r = await flightsCached(anchor);
+
+        // Optional flex sweep: cheapest CASH price per date pair around the anchor.
+        // Light calls (cashBaseline) with bounded concurrency; duffelClient spaces/retries globally.
+        // Failed pairs are dropped, not fatal — the anchor's full list already succeeded.
+        let grid = null;
+        const flex = Math.min(Math.max(Number(p.flexDays) || 0, 0), 3);
+        if (flex > 0 && p.returnDate) {
+          const party = { adults: anchor.adults, children: anchor.children };
+          const pairs = [];
+          for (const dep of genDates(p.departureDate, flex))
+            for (const ret of genDates(p.returnDate, flex))
+              if (ret >= dep) pairs.push({ dep, ret });
+          const out = new Array(pairs.length);
+          let next = 0;
+          const worker = async () => {
+            while (next < pairs.length) {
+              const i = next++;
+              const { dep, ret } = pairs[i];
+              try {
+                const c = await cashCached(anchor.origin, anchor.destination, dep, ret, anchor.travelClass, party);
+                out[i] = { dep, ret, price: c.value.price, currency: c.value.currency };
+              } catch (e) {
+                console.warn(`cash flex pair ${dep}→${ret} failed: ${e.message}`);
+                out[i] = null;
+              }
+            }
+          };
+          await Promise.all(Array.from({ length: Math.min(3, pairs.length) }, worker));
+          grid = out.filter((g) => g && g.price != null);
+        }
+        send(res, 200, { ...r.value, grid, flexDays: flex, _cacheAgeMs: r.cache.ageMs, _fresh: !r.cache.hit });
       } catch (e) {
         console.error("FLIGHTS ERROR:", e.stack || e.message);
         send(res, 500, { error: e.message });
