@@ -181,20 +181,50 @@ function loadForm(){
   }catch{ return FORM_DEFAULTS; }
 }
 
+// Loyalty programs the engine understands (names must match transferGraph/seatsAeroClient
+// exactly — they're the join key for funding + award matching). value = default ¢/pt, editable.
+const PROGRAMS=[
+  ["Amex MR (CA)",1.7],["RBC Avion",1.5],["Aeroplan",1.5],["BA Avios",1.7],
+  ["Flying Blue",1.4],["American",1.5],["WestJet",1.0],["United",1.3],
+  ["Delta",1.2],["Alaska",1.6],["Qatar",1.4],
+];
+const PROG_DEFAULT_CPP=Object.fromEntries(PROGRAMS);
+const BAL_KEY="ts_balances_v1";
+const BAL_DEFAULTS=[
+  {program:"Amex MR (CA)", amount:95000, value:1.7},
+  {program:"Aeroplan", amount:42000, value:1.5},
+  {program:"RBC Avion", amount:80000, value:1.5},
+  {program:"BA Avios", amount:30000, value:1.7},
+];
+function loadBalances(){
+  try{
+    const saved=JSON.parse(localStorage.getItem(BAL_KEY));
+    if(!Array.isArray(saved)||!saved.length) return BAL_DEFAULTS;
+    // keep only rows whose program the engine still recognizes
+    const ok=saved.filter(b=>PROG_DEFAULT_CPP[b.program]!=null);
+    return ok.length?ok:BAL_DEFAULTS;
+  }catch{ return BAL_DEFAULTS; }
+}
+
 export default function TripOptimizer(){
   const [form,setForm]=useState(loadForm);
   useEffect(()=>{ try{ localStorage.setItem(FORM_KEY, JSON.stringify(form)); }catch{} },[form]);
-  const [balances,setBalances]=useState([
-    {program:"Amex MR (CA)", amount:95000, value:1.7},
-    {program:"Aeroplan", amount:42000, value:1.5},
-    {program:"RBC Avion", amount:80000, value:1.5},
-    {program:"BA Avios", amount:30000, value:1.7},
-  ]);
+  const [balances,setBalances]=useState(loadBalances);
+  useEffect(()=>{ try{ localStorage.setItem(BAL_KEY, JSON.stringify(balances)); }catch{} },[balances]);
   const [mode,setMode]=useState("cash"); // "cash" = all flights, cash price · "optimize" = points engine
   const [state,setState]=useState({status:"idle", kind:null, data:null, sample:false, err:null});
 
   const upd=(k,v)=>setForm(f=>({...f,[k]:v}));
-  const updBal=(i,k,v)=>setBalances(b=>b.map((x,j)=>j===i?{...x,[k]:v}:x));
+  const updBal=(i,k,v)=>setBalances(b=>b.map((x,j)=>{
+    if(j!==i) return x;
+    if(k==="program") return {...x, program:v, value:PROG_DEFAULT_CPP[v] ?? x.value}; // new program -> its default ¢/pt
+    return {...x,[k]:v};
+  }));
+  const addBal=()=>setBalances(b=>{
+    const unused=PROGRAMS.map(([p])=>p).find(p=>!b.some(x=>x.program===p));
+    return unused?[...b,{program:unused, amount:0, value:PROG_DEFAULT_CPP[unused]}]:b;
+  });
+  const rmBal=(i)=>setBalances(b=>b.filter((_,j)=>j!==i));
 
   // Pull the server's actual error message out of a failed response, not just the status code.
   async function errText(res){
@@ -302,13 +332,27 @@ export default function TripOptimizer(){
           </Panel>
           {mode==="optimize" && (
           <Panel title="Your balances" sub="program · points · ¢/pt">
-            {balances.map((b,i)=>(
-              <Row key={i}>
-                <In v={b.program} on={v=>updBal(i,"program",v)} flex={2} bold/>
-                <In type="number" v={b.amount} on={v=>updBal(i,"amount",v)} flex={1.4} m right/>
-                <In type="number" step="0.1" v={b.value} on={v=>updBal(i,"value",v)} w={52} m right/>
-              </Row>
-            ))}
+            {balances.map((b,i)=>{
+              const taken=new Set(balances.map(x=>x.program));
+              const opts=PROGRAMS.map(([p])=>p).filter(p=>p===b.program||!taken.has(p));
+              return (
+                <Row key={i}>
+                  <div style={{flex:2,minWidth:130,display:"flex"}}>
+                    <div style={{flex:1,display:"grid"}}><Sel v={b.program} on={v=>updBal(i,"program",v)} opts={opts}/></div>
+                  </div>
+                  <In type="number" v={b.amount} on={v=>updBal(i,"amount",v)} flex={1.4} m right/>
+                  <In type="number" step="0.1" v={b.value} on={v=>updBal(i,"value",v)} w={52} m right/>
+                  <button onClick={()=>rmBal(i)} aria-label={`remove ${b.program}`}
+                    style={{border:`1px solid ${HAIR}`,background:SURFACE,color:MUTED,borderRadius:4,
+                      width:30,height:33,cursor:"pointer",fontSize:15,lineHeight:1}}>×</button>
+                </Row>
+              );
+            })}
+            {balances.length<PROGRAMS.length&&(
+              <button onClick={addBal} style={{fontFamily:mono,fontSize:11,fontWeight:700,letterSpacing:"0.06em",
+                color:PRIMARY,background:"none",border:`1px dashed ${HAIR}`,borderRadius:6,
+                padding:"7px 12px",cursor:"pointer",marginTop:2}}>+ Add program</button>
+            )}
             <button onClick={run} style={{marginTop:10,width:"100%",background:PRIMARY,color:"#fff",border:"none",
               borderRadius:6,padding:"11px 0",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:sans}}>
               {state.status==="loading"?"Searching…":"Find cheapest"}
