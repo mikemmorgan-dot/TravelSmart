@@ -252,6 +252,13 @@ export default function TripOptimizer(){
     try{ const j=await res.json(); return `engine ${res.status}${j.error?` — ${j.error}`:""}`; }
     catch{ return `engine ${res.status}`; }
   }
+  const friendly=(msg)=>/load failed|failed to fetch|network|abort/i.test(msg||"")
+    ? "request timed out or dropped — the server may be cold-starting. Try again: finished searches are cached and load instantly"
+    : msg;
+  // Auto-refresh: while the server reports deferred date pairs, silently re-run the same
+  // search — deferred pairs land in the cache within seconds, so each pass fills the grid.
+  const runToken=useRef(0);
+  const refreshTries=useRef(0);
 
   const [pairLoading,setPairLoading]=useState(false);
 
@@ -284,13 +291,14 @@ export default function TripOptimizer(){
         note:oks.length<combos.length?`${combos.length-oks.length} route(s) failed`:oks[0].note };
       setState({status:"done", kind:"flights", data:merged, sample:false, err:null});
     }catch(e){
-      if(!overrideDates) setState({status:"done", kind:"flights", data:null, sample:false, err:e.message});
+      if(!overrideDates) setState({status:"done", kind:"flights", data:null, sample:false, err:friendly(e.message)});
     }finally{ setPairLoading(false); }
   }
 
-  async function run(){
+  async function run(refreshing=false){
     if(mode==="cash") return runCash();
-    setState({status:"loading", kind:"optimize", data:null, sample:false, err:null});
+    const token=refreshing?runToken.current:++runToken.current;
+    if(!refreshing){ refreshTries.current=0; setState({status:"loading", kind:"optimize", data:null, sample:false, err:null}); }
     const cfg={ origin:String(form.origin).split(",")[0], destination:String(form.destination).split(",")[0],
       target:{depart:form.depart, return:form.return}, flexDays:Number(form.flexDays),
       party:{adults:Number(form.adults), children:Number(form.children)}, cabin:form.cabin,
@@ -302,9 +310,17 @@ export default function TripOptimizer(){
     try{
       const res=await fetch(`${API_BASE}/optimize`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(cfg)});
       if(!res.ok) throw new Error(await errText(res));
-      setState({status:"done", kind:"optimize", data:await res.json(), sample:false, err:null});
+      const data=await res.json();
+      if(token!==runToken.current) return; // a newer search superseded this one
+      setState({status:"done", kind:"optimize", data, sample:false, err:null});
+      if(data.partial>0 && refreshTries.current<6){
+        refreshTries.current++;
+        setTimeout(()=>{ if(token===runToken.current) run(true); }, 8000);
+      }
     }catch(e){
-      setState({status:"done", kind:"optimize", data:SAMPLE, sample:true, err:e.message});
+      if(token!==runToken.current) return;
+      if(refreshing) return; // keep the data we already have; background pass just missed
+      setState({status:"done", kind:"optimize", data:SAMPLE, sample:true, err:friendly(e.message)});
     }
   }
 
@@ -676,6 +692,11 @@ function FlightList({r,form,onPickPair,pairLoading}){
       {r.grid&&r.grid.length>1&&(
         <CashMatrix grid={r.grid} sel={r._pair} onSel={onPickPair} route={r._gridRoute} loading={pairLoading}/>
       )}
+      {r.gridPartial>0&&(
+        <Banner color={BEST} bg="var(--warn-bg)" bd="var(--warn-bd)">
+          {r.gridPartial} date pair{r.gridPartial>1?"s":""} still pricing — search again shortly to fill the grid from cache.
+        </Banner>
+      )}
       <FilterBar offers={offers} flt={flt} setFlt={setFlt} shownCount={shown.length} hasReturn={!!form.return} cur={r.currency}/>
       {!shown.length && (
         <Banner color={BEST} bg="var(--warn-bg)" bd="var(--warn-bd)">
@@ -830,6 +851,11 @@ function Results({r,balances,form}){
         <ByProgram rows={b.byProgram} balances={balances} cur={b.cash.currency}/>
       </div>
 
+      {r.partial>0&&(
+        <Banner color={BEST} bg="var(--warn-bg)" bd="var(--warn-bd)">
+          {r.partial} date pair{r.partial>1?"s":""} still pricing in the background — this grid updates itself in a few seconds.
+        </Banner>
+      )}
       <Matrix grid={r.grid} sel={sel} onSel={(k)=>setSel(s=>s===k?null:k)}/>
       {selCell
         ? <PairDetail g={selCell} balances={balances} O={O} D={D} pax={pax}/>
