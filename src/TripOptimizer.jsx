@@ -3,8 +3,23 @@ import { AIRPORTS } from "./airports";
 
 const API_BASE = ""; // same origin — server serves UI + API
 
-const INK="#15181E", MUTED="#6B7280", HAIR="#DCDFE4", PAPER="#E9EBEE", SURFACE="#FFFFFF";
-const PRIMARY="#2E2BD6", BEST="#B45309", POS="#0B7A4B";
+// Palette lives in CSS variables so light/dark can swap at runtime (and follow the OS in auto).
+const INK="var(--ink)", MUTED="var(--muted)", HAIR="var(--hair)", PAPER="var(--paper)", SURFACE="var(--surface)";
+const PRIMARY="var(--primary)", BEST="var(--best)", POS="var(--pos)", DANGER="var(--danger)";
+const LIGHT_VARS=`--paper:#E9EBEE;--surface:#FFFFFF;--ink:#15181E;--muted:#6B7280;--hair:#DCDFE4;
+  --primary:#2E2BD6;--best:#B45309;--pos:#0B7A4B;--danger:#B42318;
+  --warn-bg:#FBF3E7;--warn-bd:#EAD9BD;--err-bg:#FEF0EF;--err-bd:#F3C4C0;`;
+const DARK_VARS=`--paper:#0F1115;--surface:#1A1E25;--ink:#E7EAEF;--muted:#98A1AD;--hair:#2C323C;
+  --primary:#7B78FF;--best:#E09A4A;--pos:#3ECF8E;--danger:#FF6B5E;
+  --warn-bg:#2A2416;--warn-bd:#4A3B1F;--err-bg:#2A1715;--err-bd:#553029;`;
+const THEME_CSS=`
+:root{${LIGHT_VARS}}
+[data-theme="dark"]{${DARK_VARS}}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){${DARK_VARS}} }
+html,body{margin:0;background:var(--paper);}
+body,input,select,button{transition:background-color 0.15s,color 0.15s,border-color 0.15s;}
+input,select{color-scheme:light dark;}
+`;
 const mono='"SF Mono","JetBrains Mono","Roboto Mono",Menlo,monospace';
 const sans='"Inter",system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif';
 
@@ -30,7 +45,7 @@ function ByProgram({rows,balances,cur}){
             {p.funding&&(
               <div style={{fontFamily:mono,fontSize:10.5,color:MUTED,marginTop:1}}>
                 {p.funding.source===p.program?"from your balance":`${fmt(p.funding.sourcePts)} via ${p.funding.source}${p.funding.via?` (${p.funding.via})`:""}`}
-                {p.funding.short>0&&<span style={{color:"#B42318",fontWeight:700}}> · short {fmt(p.funding.short)}</span>}
+                {p.funding.short>0&&<span style={{color:DANGER,fontWeight:700}}> · short {fmt(p.funding.short)}</span>}
               </div>
             )}
           </div>
@@ -211,6 +226,12 @@ export default function TripOptimizer(){
   useEffect(()=>{ try{ localStorage.setItem(FORM_KEY, JSON.stringify(form)); }catch{} },[form]);
   const [balances,setBalances]=useState(loadBalances);
   useEffect(()=>{ try{ localStorage.setItem(BAL_KEY, JSON.stringify(balances)); }catch{} },[balances]);
+  const [theme,setTheme]=useState(()=>{ try{ return localStorage.getItem("ts_theme")||"auto"; }catch{ return "auto"; } });
+  useEffect(()=>{
+    const el=document.documentElement;
+    theme==="auto"?el.removeAttribute("data-theme"):el.setAttribute("data-theme",theme);
+    try{ localStorage.setItem("ts_theme",theme); }catch{}
+  },[theme]);
   const [mode,setMode]=useState("cash"); // "cash" = all flights, cash price · "optimize" = points engine
   const [state,setState]=useState({status:"idle", kind:null, data:null, sample:false, err:null});
 
@@ -289,14 +310,25 @@ export default function TripOptimizer(){
 
   return (
     <div style={{background:PAPER,color:INK,fontFamily:sans,minHeight:"100%",padding:"24px 16px 60px"}}>
+      <style>{THEME_CSS}</style>
       <div style={{maxWidth:960,margin:"0 auto"}}>
-        <div style={{borderBottom:`2px solid ${INK}`,paddingBottom:12}}>
-          <div style={{fontFamily:mono,fontSize:11,letterSpacing:"0.18em",color:MUTED,textTransform:"uppercase"}}>
-            Cross-program award optimizer
+        <div style={{borderBottom:`2px solid ${INK}`,paddingBottom:12,display:"flex",justifyContent:"space-between",alignItems:"flex-end",gap:12,flexWrap:"wrap"}}>
+          <div>
+            <div style={{fontFamily:mono,fontSize:11,letterSpacing:"0.18em",color:MUTED,textTransform:"uppercase"}}>
+              Cross-program award optimizer
+            </div>
+            <h1 style={{fontSize:28,fontWeight:800,letterSpacing:"-0.02em",margin:"6px 0 0"}}>
+              Cheapest way to fly, points included
+            </h1>
           </div>
-          <h1 style={{fontSize:28,fontWeight:800,letterSpacing:"-0.02em",margin:"6px 0 0"}}>
-            Cheapest way to fly, points included
-          </h1>
+          <div style={{display:"flex",gap:4}} aria-label="theme">
+            {[["auto","Auto"],["light","☀"],["dark","☾"]].map(([k,l])=>(
+              <button key={k} onClick={()=>setTheme(k)} title={k}
+                style={{fontFamily:mono,fontSize:11,fontWeight:700,padding:"5px 9px",borderRadius:5,cursor:"pointer",
+                  border:`1px solid ${theme===k?PRIMARY:HAIR}`,
+                  background:theme===k?PRIMARY:SURFACE,color:theme===k?"#fff":MUTED}}>{l}</button>
+            ))}
+          </div>
         </div>
 
         {/* mode toggle */}
@@ -362,12 +394,12 @@ export default function TripOptimizer(){
         </div>
 
         {state.sample && (
-          <Banner color={BEST} bg="#FBF3E7" bd="#EAD9BD">
+          <Banner color={BEST} bg="var(--warn-bg)" bd="var(--warn-bd)">
             Showing SAMPLE output — couldn't reach the engine at {API_BASE} ({state.err}). Run server.js locally or point API_BASE at your deploy.
           </Banner>
         )}
         {state.kind==="flights" && state.err && (
-          <Banner color="#B42318" bg="#FEF0EF" bd="#F3C4C0">
+          <Banner color={DANGER} bg="var(--err-bg)" bd="var(--err-bd)">
             Flight search failed ({state.err}). Check DUFFEL_TOKEN on the server.
           </Banner>
         )}
@@ -586,7 +618,7 @@ function CashMatrix({grid,sel,onSel,route,loading}){
                     <td key={rt}>
                       <button onClick={()=>!loading&&onSel(dp,rt)} disabled={loading}
                         style={{fontFamily:mono,fontSize:12,fontWeight:700,padding:"8px 6px",minWidth:64,
-                          borderRadius:7,cursor:loading?"wait":"pointer",background:shade(g.price),color:INK,
+                          borderRadius:7,cursor:loading?"wait":"pointer",background:shade(g.price),color:"#15181E",
                           border:`2px solid ${isSel?PRIMARY:isLo?BEST:"transparent"}`}}>
                         {money(g.price,g.currency)}
                       </button>
@@ -629,7 +661,7 @@ function FlightList({r,form,onPickPair,pairLoading}){
   },[offers,flt]);
   const cheapestShown=shown.length?Math.min(...shown.map(o=>o.price)):null;
   if(!offers.length) return (
-    <Banner color={BEST} bg="#FBF3E7" bd="#EAD9BD">
+    <Banner color={BEST} bg="var(--warn-bg)" bd="var(--warn-bd)">
       No offers returned{r.note?` — ${r.note}`:""}. ULCCs (e.g. Flair) aren't in the feed — check them directly.
     </Banner>
   );
@@ -646,7 +678,7 @@ function FlightList({r,form,onPickPair,pairLoading}){
       )}
       <FilterBar offers={offers} flt={flt} setFlt={setFlt} shownCount={shown.length} hasReturn={!!form.return} cur={r.currency}/>
       {!shown.length && (
-        <Banner color={BEST} bg="#FBF3E7" bd="#EAD9BD">
+        <Banner color={BEST} bg="var(--warn-bg)" bd="var(--warn-bd)">
           No flights match these filters — loosen one or hit reset.
         </Banner>
       )}
