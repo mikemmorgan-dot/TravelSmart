@@ -138,11 +138,43 @@ async function optimizeTrip(cfg, deps) {
     }
     const cashEcon = cash.price;
     const winner = award && award.econ < cashEcon ? "award" : "cash";
-    grid.push({ dep, ret, cash, award, winner, bestEcon: Math.min(cashEcon, award ? award.econ : Infinity) });
+    const byProgram = programSummary(outboundByDate[dep] || [], returnByDate[ret] || [],
+      { pax, awardTax, balances, cheapestFunding, asOf });
+    grid.push({ dep, ret, cash, award, winner, byProgram, bestEcon: Math.min(cashEcon, award ? award.econ : Infinity) });
   });
 
   grid.sort((a, b) => a.bestEcon - b.bestEcon);
   return { best: grid[0], grid, cashCalls, aviosNote: avios.note };
+}
+
+// "What would this trip cost in each program?" — unfiltered by balances, so the user sees
+// every program's price plus the cheapest way to fund it and any shortfall.
+function programSummary(outOpts, inOpts, { pax, awardTax, balances, cheapestFunding, asOf }) {
+  const cheapestBy = (opts) => {
+    const m = {};
+    for (const o of opts) {
+      if (o.seats != null && o.seats < pax) continue;
+      if (!m[o.program] || o.points < m[o.program].points) m[o.program] = o;
+    }
+    return m;
+  };
+  const O = cheapestBy(outOpts), I = cheapestBy(inOpts);
+  const progs = [...new Set([...Object.keys(O), ...Object.keys(I)])];
+  return progs.map((p) => {
+    const a = O[p], b = I[p];
+    const legs = [a, b].filter(Boolean);
+    const totalPts = legs.reduce((t, l) => t + l.points, 0) * pax;
+    const taxes = legs.reduce((t, l) => t + (l.taxes ?? awardTax[p] ?? 40), 0) * pax;
+    let funding = null;
+    if (a && b) {
+      const f = cheapestFunding(p, totalPts, balances, asOf).candidates[0];
+      if (f) funding = { source: f.source, sourcePts: f.sourcePts, via: f.via || null,
+        short: Math.max(0, f.sourcePts - (balances[f.source] ?? 0)) };
+    }
+    return { program: p, outPts: a ? a.points * pax : null, retPts: b ? b.points * pax : null,
+      totalPts: a && b ? totalPts : null, taxes: a && b ? taxes : null,
+      estimated: legs.some((l) => l.estimated), roundTrip: !!(a && b), funding };
+  }).sort((x, y) => (x.totalPts ?? Infinity) - (y.totalPts ?? Infinity));
 }
 
 function groupByDate(arr) {
