@@ -604,7 +604,7 @@ const FGroup=({label,children})=>(
   </div>
 );
 
-const FLT_DEFAULTS={sort:"price",stops:"any",airlines:[],maxPrice:null,outWin:[],retWin:[],layover:"any",minLayover:"any"};
+const FLT_DEFAULTS={sort:"price",stops:"any",airlines:[],maxPrice:null,outWin:[],retWin:[],layover:"any",minLayover:"any",hideBasic:false,needChecked:false};
 
 function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
   // Airline facets with count + lowest price, cheapest-first so the useful chips lead.
@@ -618,7 +618,7 @@ function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
   const cap=flt.maxPrice??hi;
   const upd=(patch)=>setFlt(f=>({...f,...patch}));
   const togList=(key,v)=>upd({[key]:flt[key].includes(v)?flt[key].filter(x=>x!==v):[...flt[key],v]});
-  const dirty=flt.stops!=="any"||flt.airlines.length||flt.maxPrice!=null||flt.outWin.length||flt.retWin.length||flt.sort!=="price"||flt.layover!=="any"||flt.minLayover!=="any";
+  const dirty=flt.stops!=="any"||flt.airlines.length||flt.maxPrice!=null||flt.outWin.length||flt.retWin.length||flt.sort!=="price"||flt.layover!=="any"||flt.minLayover!=="any"||flt.hideBasic||flt.needChecked;
   return (
     <div style={{background:SURFACE,border:`1px solid ${HAIR}`,borderRadius:10,padding:"12px 14px",marginBottom:14}}>
       <FGroup label="Sort">
@@ -632,6 +632,10 @@ function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
         {MIN_LAYOVERS.map(([k,l])=><Chip key={"n"+k} active={flt.minLayover===k} on={()=>upd({minLayover:k})}>{l}</Chip>)}
         <span style={{fontFamily:mono,fontSize:11,color:MUTED,padding:"0 2px"}}>·</span>
         {LAYOVERS.map(([k,l])=><Chip key={"x"+k} active={flt.layover===k} on={()=>upd({layover:k})}>{l}</Chip>)}
+      </FGroup>
+      <FGroup label="Fare">
+        <Chip active={flt.hideBasic} on={()=>upd({hideBasic:!flt.hideBasic})}>Hide Basic/Light</Chip>
+        <Chip active={flt.needChecked} on={()=>upd({needChecked:!flt.needChecked})}>Checked bag incl.</Chip>
       </FGroup>
       <FGroup label="Airline · from">
         {byAir.map(a=><Chip key={a.code} active={flt.airlines.includes(a.code)} on={()=>togList("airlines",a.code)}
@@ -724,7 +728,9 @@ function FlightList({r,form,onPickPair,pairLoading}){
       inWindows(flt.outWin,depHour(o,0)) &&
       inWindows(flt.retWin,depHour(o,1)) &&
       (flt.layover==="any"||maxLayoverMin(o)<=+flt.layover) &&
-      (flt.minLayover==="any"||minLayoverMin(o)>=+flt.minLayover)
+      (flt.minLayover==="any"||minLayoverMin(o)>=+flt.minLayover) &&
+      (!flt.hideBasic||!o.basic) &&
+      (!flt.needChecked||(o.baggage?.checked??0)>0)
     );
     if(flt.sort==="dur") s=[...s].sort((a,b)=>totalDur(a)-totalDur(b));
     else if(flt.sort==="dep") s=[...s].sort((a,b)=>(depHour(a,0)??99)-(depHour(b,0)??99)||a.price-b.price);
@@ -772,6 +778,16 @@ function FlightList({r,form,onPickPair,pairLoading}){
                 <span style={{fontWeight:800,fontSize:15}}>{airline(o.validatingAirlines?.[0])}</span>
                 {r._routes?.length>1&&o._route&&<span style={{fontFamily:mono,fontSize:10,fontWeight:700,color:INK,background:PAPER,border:`1px solid ${HAIR}`,borderRadius:3,padding:"1px 5px"}}>{o._route}</span>}
                 {o.cabin && <span style={{fontFamily:mono,fontSize:10,color:MUTED}}>{o.cabin.replace("_"," ")}</span>}
+                {o.fareBrand && <span style={{fontFamily:mono,fontSize:10,fontWeight:700,
+                  color:o.basic?BEST:MUTED,border:`1px solid ${o.basic?BEST:HAIR}`,
+                  borderRadius:3,padding:"1px 5px"}}>{o.fareBrand}</span>}
+                {o.baggage && (
+                  <span style={{fontFamily:mono,fontSize:10,color:(o.baggage.checked??0)>0?MUTED:BEST}}>
+                    {(o.baggage.checked??0)>0
+                      ? `${o.baggage.checked} checked bag${o.baggage.checked>1?"s":""}/person`
+                      : (o.baggage.carryOn??0)>0 ? "no checked bag" : "no checked bag · carry-on not incl."}
+                  </span>
+                )}
               </div>
               <div style={{display:"flex",flexWrap:"wrap",gap:16,marginTop:10}}>
                 {(o.itineraries||[]).map((s,j)=>(
