@@ -37,7 +37,7 @@ const flightsCached = wrap(
 );
 
 const deps = {
-  getCash: async (...a) => { const r = await cashCached(...a); return { ...r.value, _cacheAgeMs: r.cache.ageMs, _fresh: !r.cache.hit }; },
+  getCash: async (...a) => { const r = await cashCached(...a); return cashToCAD({ ...r.value, _cacheAgeMs: r.cache.ageMs, _fresh: !r.cache.hit }); },
   getAwards: async (...a) => (await awardsCached(...a)).value,
   cheapestFunding, aviosEstimate,
 };
@@ -130,7 +130,8 @@ const server = http.createServer((req, res) => {
           adults: p.adults ?? 2, children: p.children ?? 0,
           travelClass: p.travelClass || "economy",
         };
-        const r = await flightsCached(anchor);
+        const r0 = await flightsCached(anchor);
+        const r = { ...r0, value: await offersToCAD(r0.value) };
 
         // Optional flex sweep: cheapest CASH price per date pair around the anchor.
         // Light calls (cashBaseline) with bounded concurrency; duffelClient spaces/retries globally.
@@ -160,7 +161,8 @@ const server = http.createServer((req, res) => {
               if (Date.now() > deadline) { deferred.push(pairs[i]); out[i] = null; continue; }
               try {
                 const c = await cashCached(anchor.origin, anchor.destination, dep, ret, anchor.travelClass, party);
-                out[i] = { dep, ret, price: c.value.price, currency: c.value.currency };
+                const cad = await cashToCAD(c.value);
+                out[i] = { dep, ret, price: cad.price, currency: cad.currency };
               } catch (e) {
                 console.warn(`cash flex pair ${dep}→${ret} failed: ${e.message}`);
                 out[i] = null;
