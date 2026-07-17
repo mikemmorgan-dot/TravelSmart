@@ -33,9 +33,16 @@ function offerCabin(o) {
 function normalizeOffer(o) {
   const price = Number(o.total_amount);
   const base = Number(o.base_amount || 0);
-  // Baggage allowance off the first segment's first passenger (Duffel repeats it per segment).
-  const bags = o.slices?.[0]?.segments?.[0]?.passengers?.[0]?.baggages || [];
-  const bag = (t) => bags.filter((b) => b.type === t).reduce((n, b) => n + (b.quantity || 0), 0);
+  // Baggage allowance per direction; claim only what BOTH directions include (a fare with a
+  // checked bag outbound but none on the return shouldn't advertise "checked bag").
+  const sliceBag = (sl, t) => (sl.segments?.[0]?.passengers?.[0]?.baggages || [])
+    .filter((b) => b.type === t).reduce((n, b) => n + (b.quantity || 0), 0);
+  const bag = (t) => (o.slices?.length ? Math.min(...o.slices.map((sl) => sliceBag(sl, t))) : 0);
+  // Offer-level fare brand + a "basic-style" flag (Basic Economy, Light, etc. — the fares
+  // that surprise families at the gate). Brand names still shown verbatim so users can judge.
+  const brands = [...new Set((o.slices || []).map((sl) => sl.fare_brand_name).filter(Boolean))];
+  const fareBrand = brands.join(" / ") || null;
+  const basic = /\b(basic|light|ultrabasic)\b/i.test(fareBrand || "");
   const cond = (c) => (c ? { allowed: c.allowed, penalty: c.penalty_amount ? Number(c.penalty_amount) : null } : null);
   return {
     price,                                   // all-in, whole party, all slices
@@ -46,6 +53,7 @@ function normalizeOffer(o) {
     validatingAirlines: o.owner?.iata_code ? [o.owner.iata_code] : [],
     ownerName: o.owner?.name || null,
     baggage: { carryOn: bag("carry_on"), checked: bag("checked") },
+    fareBrand, basic,
     conditions: {
       change: cond(o.conditions?.change_before_departure),
       refund: cond(o.conditions?.refund_before_departure),
