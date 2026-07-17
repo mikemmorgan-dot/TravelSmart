@@ -18,6 +18,10 @@ const THEME_CSS=`
 @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){${DARK_VARS}} }
 html,body{margin:0;background:var(--paper);}
 body,input,select,button{transition:background-color 0.15s,color 0.15s,border-color 0.15s;}
+@keyframes ts-spin{to{transform:rotate(360deg)}}
+.ts-spin{display:inline-block;width:13px;height:13px;border:2px solid rgba(255,255,255,0.35);
+  border-top-color:#fff;border-radius:50%;animation:ts-spin 0.7s linear infinite;
+  vertical-align:-2px;margin-right:8px;}
 input,select{color-scheme:light dark;}
 `;
 const mono='"SF Mono","JetBrains Mono","Roboto Mono",Menlo,monospace';
@@ -263,6 +267,7 @@ export default function TripOptimizer(){
   const [pairLoading,setPairLoading]=useState(false);
 
   async function runCash(overrideDates){
+    if(state.status==="loading") return; // ignore extra taps
     const dep=overrideDates?.dep||form.depart, ret=overrideDates?.ret||form.return;
     const keepGrid=overrideDates?state.data?.grid:null;      // date-pair tap: keep the sweep grid
     const flex=overrideDates?0:Number(form.flexDays)||0;     // sweep only on a fresh search
@@ -296,6 +301,7 @@ export default function TripOptimizer(){
   }
 
   async function run(refreshing=false){
+    if(!refreshing && state.status==="loading") return; // ignore extra taps
     if(mode==="cash") return runCash();
     const token=refreshing?runToken.current:++runToken.current;
     if(!refreshing){ refreshTries.current=0; setState({status:"loading", kind:"optimize", data:null, sample:false, err:null}); }
@@ -372,9 +378,11 @@ export default function TripOptimizer(){
               <Field label="Adults"><In type="number" v={form.adults} on={v=>upd("adults",v)} w={56}/></Field>
               <Field label="Children"><In type="number" v={form.children} on={v=>upd("children",v)} w={56}/></Field></Row>
             {mode==="cash" && (
-              <button onClick={run} style={{marginTop:10,width:"100%",background:PRIMARY,color:"#fff",border:"none",
-                borderRadius:6,padding:"11px 0",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:sans}}>
-                {state.status==="loading"?"Searching…":"Show all flights"}
+              <button onClick={()=>run()} disabled={state.status==="loading"}
+                style={{marginTop:10,width:"100%",background:PRIMARY,color:"#fff",border:"none",
+                borderRadius:6,padding:"11px 0",fontSize:14,fontWeight:700,fontFamily:sans,
+                cursor:state.status==="loading"?"wait":"pointer",opacity:state.status==="loading"?0.65:1}}>
+                {state.status==="loading"?<><span className="ts-spin"/>Searching…</>:"Show all flights"}
               </button>
             )}
           </Panel>
@@ -401,9 +409,11 @@ export default function TripOptimizer(){
                 color:PRIMARY,background:"none",border:`1px dashed ${HAIR}`,borderRadius:6,
                 padding:"7px 12px",cursor:"pointer",marginTop:2}}>+ Add program</button>
             )}
-            <button onClick={run} style={{marginTop:10,width:"100%",background:PRIMARY,color:"#fff",border:"none",
-              borderRadius:6,padding:"11px 0",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:sans}}>
-              {state.status==="loading"?"Searching…":"Find cheapest"}
+            <button onClick={()=>run()} disabled={state.status==="loading"}
+              style={{marginTop:10,width:"100%",background:PRIMARY,color:"#fff",border:"none",
+              borderRadius:6,padding:"11px 0",fontSize:14,fontWeight:700,fontFamily:sans,
+              cursor:state.status==="loading"?"wait":"pointer",opacity:state.status==="loading"?0.65:1}}>
+              {state.status==="loading"?<><span className="ts-spin"/>Searching… fresh sweeps take ~15–30s</>:"Find cheapest"}
             </button>
           </Panel>
           )}
@@ -687,7 +697,7 @@ function FlightList({r,form,onPickPair,pairLoading}){
         <h2 style={{fontSize:12,fontFamily:mono,letterSpacing:"0.14em",textTransform:"uppercase",color:MUTED,margin:0}}>
           {offers.length} option{offers.length!==1?"s":""} · {form.origin} ⇄ {form.destination}{r._pair?` · ${r._pair.dep} → ${r._pair.ret}`:""} · total for {pax} traveller{pax>1?"s":""}
         </h2>
-        <span style={{fontFamily:mono,fontSize:10,color:MUTED}}>{age} · {r.currency}</span>
+        <span style={{fontFamily:mono,fontSize:10,color:MUTED}}>{age} · {r.currency}{r.fx&&` · from ${r.fx.from} @ ${r.fx.rate}${r.fx.approx?" (approx — BoC unavailable)":` (BoC ${r.fx.asOf})`}`}</span>
       </div>
       {r.grid&&r.grid.length>1&&(
         <CashMatrix grid={r.grid} sel={r._pair} onSel={onPickPair} route={r._gridRoute} loading={pairLoading}/>
@@ -888,6 +898,7 @@ function PairDetail({g,balances,O,D,pax}){
           <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>Cash{g.winner==="cash"?" · winner":""}</div>
           <div style={{fontFamily:mono,fontSize:22,fontWeight:800,marginTop:4}}>{money(g.cash.price,g.cash.currency)}</div>
           <div style={{fontFamily:mono,fontSize:11,color:MUTED}}>whole party, all-in{g.cash.taxes?` · taxes ${money(g.cash.taxes,g.cash.currency)}`:""}</div>
+          {g.cash.fx&&<div style={{fontFamily:mono,fontSize:10,color:MUTED}}>converted from {g.cash.fx.from} {fmt(g.cash.fx.originalPrice)} @ {g.cash.fx.rate}{g.cash.fx.approx?" (approx)":""}</div>}
           <a href={`https://www.google.com/travel/flights?q=${encodeURIComponent(`Flights from ${O} to ${D} on ${g.dep} through ${g.ret}`)}`}
             target="_blank" rel="noopener noreferrer" style={VERIFY_STYLE}>Google Flights ↗</a>
         </div>
