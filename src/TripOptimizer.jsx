@@ -441,9 +441,24 @@ export default function TripOptimizer(){
 
 // ---- Cash mode: render every offer the engine returned, cheapest first ----
 const hhmm=(iso)=>iso?iso.slice(11,16):"—";
-const dur=(d)=>{ if(!d) return ""; const m=d.match(/PT(?:(\d+)H)?(?:(\d+)M)?/); if(!m) return d;
-  return `${m[1]?m[1]+"h ":""}${m[2]?m[2]+"m":""}`.trim(); };
-const AIRLINES={AC:"Air Canada",WS:"WestJet",TS:"Air Transat",PD:"Porter",UA:"United",AA:"American",DL:"Delta",B6:"JetBlue",F8:"Flair",WG:"Sunwing",ZZ:"Duffel Airways (test)",ZX:"Duffel Airways (test)"};
+const dur=(d)=>{ if(!d) return "";
+  const m=d.match(/P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?/); if(!m) return d;
+  const h=(+m[1]||0)*24+(+m[2]||0), mm=+m[3]||0;
+  return `${h?h+"h ":""}${mm?mm+"m":""}`.trim()||"0m"; };
+const AIRLINES={
+  // Canada / US
+  AC:"Air Canada",RV:"Air Canada Rouge",WS:"WestJet",TS:"Air Transat",PD:"Porter",F8:"Flair",WG:"Sunwing",
+  UA:"United",AA:"American",DL:"Delta",B6:"JetBlue",AS:"Alaska",WN:"Southwest",NK:"Spirit",F9:"Frontier",HA:"Hawaiian",
+  // Transatlantic / Europe
+  AZ:"ITA Airways",AF:"Air France",KL:"KLM",BA:"British Airways",LH:"Lufthansa",LX:"Swiss",OS:"Austrian",
+  SN:"Brussels Airlines",IB:"Iberia",EI:"Aer Lingus",TP:"TAP Air Portugal",TK:"Turkish Airlines",
+  VS:"Virgin Atlantic",AY:"Finnair",SK:"SAS",LO:"LOT Polish",A3:"Aegean",FI:"Icelandair",UX:"Air Europa",
+  // Middle East / Asia / Oceania
+  EK:"Emirates",QR:"Qatar Airways",EY:"Etihad",AI:"Air India",JL:"Japan Airlines",NH:"ANA",
+  KE:"Korean Air",OZ:"Asiana",CX:"Cathay Pacific",SQ:"Singapore Airlines",QF:"Qantas",NZ:"Air New Zealand",
+  // Latin America / Caribbean
+  AM:"Aeromexico",CM:"Copa",AV:"Avianca",LA:"LATAM",Y4:"Volaris",BW:"Caribbean Airlines",
+  ZZ:"Duffel Airways (test)",ZX:"Duffel Airways (test)"};
 const airline=(c)=>AIRLINES[c]||c||"—";
 
 // City lookup from the airports dataset: "PHL" → "Philadelphia"
