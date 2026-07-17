@@ -564,6 +564,18 @@ const durMin=(d)=>{ const m=(d||"").match(/PT(?:(\d+)H)?(?:(\d+)M)?/); return m?
 const totalDur=(o)=>(o.itineraries||[]).reduce((t,s)=>t+durMin(s.duration),0);
 const depHour=(o,leg)=>{ const iso=o.itineraries?.[leg]?.segments?.[0]?.depart; return iso?+iso.slice(11,13):null; };
 const maxStops=(o)=>Math.max(...(o.itineraries||[{stops:0}]).map(s=>s.stops||0));
+const maxLayoverMin=(o)=>{
+  let max=0;
+  for(const it of o.itineraries||[]){
+    const segs=it.segments||[];
+    for(let i=1;i<segs.length;i++){
+      const gap=(Date.parse(segs[i].depart)-Date.parse(segs[i-1].arrive))/60000;
+      if(gap>max) max=gap;
+    }
+  }
+  return max; // 0 for nonstops
+};
+const LAYOVERS=[["any","Any"],["120","≤ 2h"],["240","≤ 4h"],["360","≤ 6h"]];
 const WINDOWS=[["early","before 8a",h=>h<8],["morning","8a–12p",h=>h>=8&&h<12],["afternoon","12–6p",h=>h>=12&&h<18],["evening","after 6p",h=>h>=18]];
 const inWindows=(sel,h)=>!sel.length||h==null||sel.some(k=>WINDOWS.find(w=>w[0]===k)[2](h));
 const SORTS=[["price","Cheapest"],["dur","Fastest"],["dep","Earliest out"]];
@@ -580,7 +592,7 @@ const FGroup=({label,children})=>(
   </div>
 );
 
-const FLT_DEFAULTS={sort:"price",stops:"any",airlines:[],maxPrice:null,outWin:[],retWin:[]};
+const FLT_DEFAULTS={sort:"price",stops:"any",airlines:[],maxPrice:null,outWin:[],retWin:[],layover:"any"};
 
 function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
   // Airline facets with count + lowest price, cheapest-first so the useful chips lead.
@@ -594,7 +606,7 @@ function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
   const cap=flt.maxPrice??hi;
   const upd=(patch)=>setFlt(f=>({...f,...patch}));
   const togList=(key,v)=>upd({[key]:flt[key].includes(v)?flt[key].filter(x=>x!==v):[...flt[key],v]});
-  const dirty=flt.stops!=="any"||flt.airlines.length||flt.maxPrice!=null||flt.outWin.length||flt.retWin.length||flt.sort!=="price";
+  const dirty=flt.stops!=="any"||flt.airlines.length||flt.maxPrice!=null||flt.outWin.length||flt.retWin.length||flt.sort!=="price"||flt.layover!=="any";
   return (
     <div style={{background:SURFACE,border:`1px solid ${HAIR}`,borderRadius:10,padding:"12px 14px",marginBottom:14}}>
       <FGroup label="Sort">
@@ -603,6 +615,9 @@ function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
       <FGroup label="Stops">
         {[["any","Any"],["0","Nonstop"],["1","≤ 1 stop"]].map(([k,l])=>
           <Chip key={k} active={flt.stops===k} on={()=>upd({stops:k})}>{l}</Chip>)}
+      </FGroup>
+      <FGroup label="Max layover">
+        {LAYOVERS.map(([k,l])=><Chip key={k} active={flt.layover===k} on={()=>upd({layover:k})}>{l}</Chip>)}
       </FGroup>
       <FGroup label="Airline · from">
         {byAir.map(a=><Chip key={a.code} active={flt.airlines.includes(a.code)} on={()=>togList("airlines",a.code)}
@@ -693,7 +708,8 @@ function FlightList({r,form,onPickPair,pairLoading}){
       (!flt.airlines.length||flt.airlines.includes(o.validatingAirlines?.[0])) &&
       (flt.maxPrice==null||o.price<=flt.maxPrice) &&
       inWindows(flt.outWin,depHour(o,0)) &&
-      inWindows(flt.retWin,depHour(o,1))
+      inWindows(flt.retWin,depHour(o,1)) &&
+      (flt.layover==="any"||maxLayoverMin(o)<=+flt.layover)
     );
     if(flt.sort==="dur") s=[...s].sort((a,b)=>totalDur(a)-totalDur(b));
     else if(flt.sort==="dep") s=[...s].sort((a,b)=>(depHour(a,0)??99)-(depHour(b,0)??99)||a.price-b.price);
