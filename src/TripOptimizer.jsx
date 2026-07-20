@@ -264,7 +264,11 @@ export default function TripOptimizer(){
     try{ localStorage.setItem("ts_theme",theme); }catch{}
   },[theme]);
   const [mode,setMode]=useState("cash"); // "cash" = all flights, cash price · "optimize" = points engine
-  const [state,setState]=useState({status:"idle", kind:null, data:null, sample:false, err:null});
+  // Results live per-tab so switching cash <-> points never discards either side.
+  const IDLE={status:"idle", kind:null, data:null, sample:false, err:null};
+  const [states,setStates]=useState({flights:IDLE, optimize:IDLE});
+  const state=states[mode==="cash"?"flights":"optimize"];
+  const setState=(s)=>setStates(prev=>({...prev,[s.kind]:s}));
 
   const upd=(k,v)=>setForm(f=>({...f,[k]:v}));
   const updBal=(i,k,v)=>setBalances(b=>b.map((x,j)=>{
@@ -290,6 +294,8 @@ export default function TripOptimizer(){
   // search — deferred pairs land in the cache within seconds, so each pass fills the grid.
   const runToken=useRef(0);
   const refreshTries=useRef(0);
+  const pendingAward=useRef(false);
+  useEffect(()=>{ if(mode==="optimize"&&pendingAward.current){ pendingAward.current=false; run(); } },[mode]);
 
   const [pairLoading,setPairLoading]=useState(false);
 
@@ -451,14 +457,16 @@ export default function TripOptimizer(){
             Showing SAMPLE output — couldn't reach the engine at {API_BASE} ({state.err}). Run server.js locally or point API_BASE at your deploy.
           </Banner>
         )}
-        {state.kind==="flights" && state.err && (
+        {mode==="cash" && state.err && (
           <Banner color={DANGER} bg="var(--err-bg)" bd="var(--err-bd)">
             Flight search failed ({state.err}). Check DUFFEL_TOKEN on the server.
           </Banner>
         )}
 
-        {state.kind==="flights" && state.data && <FlightList r={state.data} form={form} onPickPair={(dep,ret)=>runCash({dep,ret})} pairLoading={pairLoading}/>}
-        {state.kind==="optimize" && state.data && <Results r={state.data} balances={balances} form={form}/>}
+        {mode==="cash" && state.data && <FlightList r={state.data} form={form} balances={balances}
+          onPickPair={(dep,ret)=>runCash({dep,ret})} pairLoading={pairLoading}
+          onAwardCheck={()=>{ pendingAward.current=true; setMode("optimize"); }}/>}
+        {mode==="optimize" && state.data && <Results r={state.data} balances={balances} form={form}/>}
         <WatchPanel form={form}/>
         {state.status==="idle" && <Empty/>}
       </div>
@@ -520,7 +528,8 @@ function Slice({s,label}){
 // ---- Price watches: saved search + target price, emailed when it hits ----
 function WatchPanel({form}){
   const [watches,setWatches]=useState(null);   // null = not loaded
-  const [email,setEmail]=useState("");
+  const [email,setEmailRaw]=useState(()=>{ try{ return localStorage.getItem("ts_watch_email")||""; }catch{ return ""; } });
+  const setEmail=(v)=>{ setEmailRaw(v); try{ localStorage.setItem("ts_watch_email",v); }catch{} };
   const [target,setTarget]=useState("");
   const [msg,setMsg]=useState(null);
   const refresh=()=>fetch(`${API_BASE}/watches`).then(r=>r.json()).then(setWatches).catch(()=>setWatches([]));
@@ -788,7 +797,118 @@ function CashMatrix({grid,sel,onSel,route,loading}){
   );
 }
 
-function FlightList({r,form,onPickPair,pairLoading}){
+const FAV_KEY="ts_favs_v1";
+const favId=(o,form)=>[form.origin,form.destination,form.depart,form.return,
+  ...(o.itineraries||[]).flatMap(it=>(it.segments||[]).map(sg=>`${sg.carrier}${sg.number}@${sg.depart}`))].join("|");
+function loadFavs(){ try{ const f=JSON.parse(localStorage.getItem(FAV_KEY)); return Array.isArray(f)?f:[]; }catch{ return []; } }
+
+// One saved flight, compact: route, dates, flight numbers, price when saved.
+function FavRow({f,onRemove,onWatch}){
+  const legs=(f.offer.itineraries||[]).map(it=>{
+    const segs=it.segments||[]; if(!segs.length) return "";
+    return `${segs[0].depart?.slice(11,16)} ${segs[0].from}→${segs[segs.length-1].to}`;
+  }).join(" · ");
+  return (
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,
+      padding:"9px 12px",borderBottom:`1px solid ${HAIR}`,flexWrap:"wrap"}}>
+      <div style={{minWidth:200,flex:1}}>
+        <div style={{fontWeight:700,fontSize:13}}>{airline(f.offer.validatingAirlines?.[0])}
+          <span style={{fontFamily:mono,fontSize:10,color:MUTED,marginLeft:8}}>{f.dep} → {f.ret||"one-way"}</span></div>
+        <div style={{fontFamily:mono,fontSize:11,color:MUTED}}>{f.route} · {legs}</div>
+      </div>
+      <div style={{fontFamily:mono,fontWeight:800,fontSize:13,color:POS}}>{money(f.offer.price,f.offer.currency)}
+        <span style={{fontSize:9,color:MUTED,fontWeight:400}}> at save</span></div>
+      <button onClick={onWatch} aria-label={f.watchId?"stop watching price":"watch price"}
+        title={f.watchId?`watching — alert ≤ $${f.watchTarget}`:"email me if this route drops below the saved price"}
+        style={{border:`1px solid ${f.watchId?PRIMARY:HAIR}`,background:f.watchId?PRIMARY:SURFACE,
+          color:f.watchId?"#fff":MUTED,borderRadius:4,minWidth:26,height:26,cursor:"pointer",fontFamily:mono,fontSize:11,padding:"0 6px"}}>
+        {f.watchId?`◉ $${f.watchTarget}`:"○ watch"}</button>
+      <button onClick={onRemove} aria-label="remove saved flight"
+        style={{border:`1px solid ${HAIR}`,background:SURFACE,color:MUTED,borderRadius:4,width:26,height:26,cursor:"pointer"}}>×</button>
+    </div>
+  );
+}
+
+// Points needed to cover this cash fare at your ¢/pt valuations — the "pay with points /
+// portal redemption" view. Award-chart pricing can beat this; that's what the award check is for.
+function PayWithPoints({o,balances,onAwardCheck}){
+  const rows=(balances||[]).filter(b=>Number(b.value)>0).map(b=>{
+    const pts=Math.ceil(o.price/(Number(b.value)/100));
+    const bal=Number(b.amount)||0;
+    return {program:b.program, pts, bal, ok:bal>=pts};
+  }).sort((a,b)=>a.pts-b.pts);
+  if(!rows.length) return null;
+  return (
+    <div style={{marginTop:12,paddingTop:10,borderTop:`1px solid ${HAIR}`}} onClick={e=>e.stopPropagation()}>
+      <div style={{fontFamily:mono,fontSize:10,letterSpacing:"0.12em",color:MUTED,textTransform:"uppercase",marginBottom:6}}>
+        Pay with points · at your ¢/pt
+      </div>
+      {rows.map(rw=>(
+        <div key={rw.program} style={{display:"flex",justifyContent:"space-between",fontFamily:mono,fontSize:12,padding:"3px 0"}}>
+          <span>{rw.program}</span>
+          <span>
+            <b>{fmt(rw.pts)}</b> pts
+            {rw.ok
+              ? <span style={{color:POS}}> · covered ({fmt(rw.bal)})</span>
+              : <span style={{color:DANGER}}> · short {fmt(rw.pts-rw.bal)}</span>}
+          </span>
+        </div>
+      ))}
+      <div style={{fontFamily:mono,fontSize:10,color:MUTED,marginTop:4}}>
+        Cash-equivalent redemption. Award-chart pricing may beat this —
+      </div>
+      {onAwardCheck&&(
+        <button onClick={onAwardCheck}
+          style={{marginTop:6,fontFamily:mono,fontSize:11,fontWeight:700,color:PRIMARY,background:"none",
+            border:`1px solid ${PRIMARY}`,borderRadius:5,padding:"6px 10px",cursor:"pointer"}}>
+          Check award space for these dates →
+        </button>
+      )}
+    </div>
+  );
+}
+
+function FlightList({r,form,balances,onPickPair,pairLoading,onAwardCheck}){
+  const [favs,setFavs]=useState(loadFavs);
+  const [favsOpen,setFavsOpen]=useState(false);
+  useEffect(()=>{ try{ localStorage.setItem(FAV_KEY,JSON.stringify(favs.slice(0,20))); }catch{} },[favs]);
+  const isFav=(o)=>favs.some(f=>f.id===favId(o,form));
+  const togFav=(o)=>setFavs(fs=>{
+    const id=favId(o,form);
+    return fs.some(f=>f.id===id) ? fs.filter(f=>f.id!==id)
+      : [{id, offer:o, route:`${form.origin}⇄${form.destination}`, dep:form.depart, ret:form.return,
+          origin:String(form.origin).split(",")[0], destination:String(form.destination).split(",")[0],
+          adults:Number(form.adults), children:Number(form.children), cabin:form.cabin,
+          savedAt:Date.now(), watchId:null, watchTarget:null}, ...fs].slice(0,20);
+  });
+  const [favMsg,setFavMsg]=useState(null);
+  async function watchFav(f){
+    setFavMsg(null);
+    if(f.watchId){ // already watching -> stop
+      try{ await fetch(`${API_BASE}/watches/${f.watchId}`,{method:"DELETE"}); }catch{}
+      setFavs(fs=>fs.map(x=>x.id===f.id?{...x,watchId:null,watchTarget:null}:x));
+      return;
+    }
+    let email=""; try{ email=localStorage.getItem("ts_watch_email")||""; }catch{}
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){
+      setFavMsg("Set your alert email in the Price Watch panel below first — then tap the bell again.");
+      return;
+    }
+    // Alert when the route drops meaningfully below the fare you saved: 5% under, rounded.
+    const target=Math.max(1,Math.round(f.offer.price*0.95));
+    try{
+      const res=await fetch(`${API_BASE}/watches`,{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ origin:f.origin||String(form.origin).split(",")[0],
+          destination:f.destination||String(form.destination).split(",")[0],
+          depart:f.dep, return:f.ret,
+          adults:f.adults??Number(form.adults), children:f.children??Number(form.children),
+          cabin:f.cabin||form.cabin, targetPrice:target, email })});
+      const j=await res.json();
+      if(!res.ok) throw new Error(j.error||"failed");
+      setFavs(fs=>fs.map(x=>x.id===f.id?{...x,watchId:j.id,watchTarget:target}:x));
+      setFavMsg(`Watching — email when ${f.origin||""}→${f.destination||""} drops to ≤ $${target}.`);
+    }catch(e){ setFavMsg(`Watch failed: ${e.message}`); }
+  }
   const offers=r.offers||[];
   const pax=(Number(form.adults)||0)+(Number(form.children)||0)||1;
   const age=r._cacheAgeMs>60000?`cached ${Math.round(r._cacheAgeMs/60000)} min ago`:"live";
@@ -828,6 +948,22 @@ function FlightList({r,form,onPickPair,pairLoading}){
   );
   return (
     <div>
+      {favs.length>0&&(
+        <div style={{background:SURFACE,border:`1px solid ${HAIR}`,borderRadius:10,marginBottom:12,overflow:"hidden"}}>
+          <button onClick={()=>setFavsOpen(v=>!v)}
+            style={{width:"100%",textAlign:"left",background:"none",border:"none",cursor:"pointer",
+              padding:"10px 12px",fontFamily:mono,fontSize:11,fontWeight:700,letterSpacing:"0.1em",color:BEST}}>
+            ★ SAVED FLIGHTS ({favs.length}) {favsOpen?"▴":"▾"}
+          </button>
+          {favsOpen&&favs.map(f=>(
+            <FavRow key={f.id} f={f} onWatch={()=>watchFav(f)}
+              onRemove={()=>{ if(f.watchId) watchFav(f); setFavs(fs=>fs.filter(x=>x.id!==f.id)); }}/>
+          ))}
+          {favsOpen&&favMsg&&(
+            <div style={{fontFamily:mono,fontSize:11,color:BEST,padding:"8px 12px"}}>{favMsg}</div>
+          )}
+        </div>
+      )}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",flexWrap:"wrap",gap:8,margin:"4px 0 12px"}}>
         <h2 style={{fontSize:12,fontFamily:mono,letterSpacing:"0.14em",textTransform:"uppercase",color:MUTED,margin:0}}>
           {offers.length} option{offers.length!==1?"s":""} · {form.origin} ⇄ {form.destination}{r._pair?` · ${r._pair.dep} → ${r._pair.ret}`:""} · total for {pax} traveller{pax>1?"s":""}
@@ -858,6 +994,10 @@ function FlightList({r,form,onPickPair,pairLoading}){
             <div style={{flex:"1 1 240px",minWidth:240}}>
               <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
                 {o.price===cheapestShown && <span style={{fontFamily:mono,fontSize:9,letterSpacing:"0.1em",color:"#fff",background:BEST,padding:"2px 6px",borderRadius:3}}>CHEAPEST</span>}
+                <button onClick={e=>{ e.stopPropagation(); togFav(o); }}
+                  aria-label={isFav(o)?"remove from saved":"save flight"}
+                  style={{background:"none",border:"none",cursor:"pointer",fontSize:16,lineHeight:1,padding:"0 2px",
+                    color:isFav(o)?BEST:MUTED}}>{isFav(o)?"★":"☆"}</button>
                 <span style={{fontWeight:800,fontSize:15}}>{airline(o.validatingAirlines?.[0])}</span>
                 {r._routes?.length>1&&o._route&&<span style={{fontFamily:mono,fontSize:10,fontWeight:700,color:INK,background:PAPER,border:`1px solid ${HAIR}`,borderRadius:3,padding:"1px 5px"}}>{o._route}</span>}
                 {o.cabin && <span style={{fontFamily:mono,fontSize:10,color:MUTED}}>{o.cabin.replace("_"," ")}</span>}
@@ -886,7 +1026,7 @@ function FlightList({r,form,onPickPair,pairLoading}){
               </div>
             </div>
           </div>
-          {open===i && <OfferDetail o={o} form={form}/>}
+          {open===i && <OfferDetail o={o} form={form} balances={balances} onAwardCheck={onAwardCheck}/>}
         </div>
       ))}
       <p style={{color:MUTED,fontSize:12,marginTop:12,lineHeight:1.6}}>
@@ -896,7 +1036,7 @@ function FlightList({r,form,onPickPair,pairLoading}){
   );
 }
 
-function OfferDetail({o,form}){
+function OfferDetail({o,form,balances,onAwardCheck}){
   const gfq=`Flights from ${form.origin} to ${form.destination} on ${form.depart}${form.return?` through ${form.return}`:""}`;
   const gfUrl=`https://www.google.com/travel/flights?q=${encodeURIComponent(gfq)}`;
   const conds=[
@@ -947,6 +1087,7 @@ function OfferDetail({o,form}){
       <div style={{fontFamily:mono,fontSize:10,color:MUTED,marginTop:8}}>
         Fare rules come from the airline via Duffel — confirm on the airline's site before booking.
       </div>
+      <PayWithPoints o={o} balances={balances} onAwardCheck={onAwardCheck}/>
     </div>
   );
 }
