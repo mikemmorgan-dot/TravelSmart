@@ -72,9 +72,36 @@ function ByProgram({rows,balances,cur}){
 }
 
 // ---- Airport typeahead: type a city, airport name, or code; pick from matches ----
+// IATA metropolitan area codes — Duffel accepts these natively as origin/destination,
+// searching every member airport in one request.
+const METROS=[
+ ["NYC","New York","US",["JFK","LGA","EWR"]],
+ ["YTO","Toronto","CA",["YYZ","YTZ"]],
+ ["LON","London","GB",["LHR","LGW","STN","LTN","LCY"]],
+ ["PAR","Paris","FR",["CDG","ORY"]],
+ ["CHI","Chicago","US",["ORD","MDW"]],
+ ["WAS","Washington","US",["IAD","DCA","BWI"]],
+ ["ROM","Rome","IT",["FCO","CIA"]],
+ ["MIL","Milan","IT",["MXP","LIN","BGY"]],
+ ["TYO","Tokyo","JP",["NRT","HND"]],
+ ["OSA","Osaka","JP",["KIX","ITM"]],
+ ["SEL","Seoul","KR",["ICN","GMP"]],
+ ["STO","Stockholm","SE",["ARN","BMA","NYO"]],
+ ["SAO","S\u00e3o Paulo","BR",["GRU","CGH"]],
+ ["RIO","Rio de Janeiro","BR",["GIG","SDU"]],
+ ["BUE","Buenos Aires","AR",["EZE","AEP"]],
+ ["HOU","Houston","US",["IAH","HOU"]],
+];
+function metroHits(q){
+  return METROS
+    .filter(([code,city])=>code.toLowerCase().startsWith(q)||city.toLowerCase().startsWith(q))
+    .map(([code,city,country,aps])=>[code,`All airports \u00b7 ${aps.join(" \u00b7 ")}`,city,country]);
+}
+
 function searchAirports(q){
   q=q.trim().toLowerCase();
   if(q.length<2) return [];
+  const metros=metroHits(q);
   const starts=[], cityStarts=[], contains=[];
   for(const a of AIRPORTS){
     const [iata,name,city]=a;
@@ -85,7 +112,7 @@ function searchAirports(q){
     else if(lc.includes(q)||ln.includes(q)) contains.push(a);
     if(starts.length+cityStarts.length+contains.length>60) break;
   }
-  return [...starts,...cityStarts,...contains].slice(0,8);
+  return [...metros,...starts,...cityStarts,...contains].slice(0,8);
 }
 
 // ---- Award verification deep links. Aeroplan & AA accept parametric searches (formats
@@ -588,6 +615,12 @@ const minLayoverMin=(o)=>{
   return min;
 };
 const MIN_LAYOVERS=[["any","Any"],["60","≥ 1h"],["90","≥ 1h30"],["120","≥ 2h"]];
+const arrHour=(o,leg)=>{ const segs=o.itineraries?.[leg]?.segments; const iso=segs?.[segs.length-1]?.arrive; return iso?+iso.slice(11,13):null; };
+const connAirports=(o)=>{ const out=[]; for(const it of o.itineraries||[]) for(const g of (it.segments||[]).slice(0,-1)) if(g.to) out.push(g.to); return out; };
+const AIRPORT_COUNTRY=Object.fromEntries(AIRPORTS.map(a=>[a[0],a[3]]));
+const hasUSConnection=(o)=>connAirports(o).some(c=>AIRPORT_COUNTRY[c]==="US");
+const durLabel=(min)=>`${Math.floor(min/60)}h${min%60?` ${min%60}m`:""}`;
+const destAp=(o)=>{ const segs=o.itineraries?.[0]?.segments; return segs?.[segs.length-1]?.to||null; };
 const WINDOWS=[["early","before 8a",h=>h<8],["morning","8a–12p",h=>h>=8&&h<12],["afternoon","12–6p",h=>h>=12&&h<18],["evening","after 6p",h=>h>=18]];
 const inWindows=(sel,h)=>!sel.length||h==null||sel.some(k=>WINDOWS.find(w=>w[0]===k)[2](h));
 const SORTS=[["price","Cheapest"],["dur","Fastest"],["dep","Earliest out"]];
@@ -604,7 +637,7 @@ const FGroup=({label,children})=>(
   </div>
 );
 
-const FLT_DEFAULTS={sort:"price",stops:"any",airlines:[],maxPrice:null,outWin:[],retWin:[],layover:"any",minLayover:"any",hideBasic:false,needChecked:false};
+const FLT_DEFAULTS={sort:"price",stops:"any",airlines:[],maxPrice:null,outWin:[],retWin:[],layover:"any",minLayover:"any",hideBasic:false,needChecked:false,outArr:[],retArr:[],noUS:false,exclAirports:[],maxDur:null,destAp:[]};
 
 function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
   // Airline facets with count + lowest price, cheapest-first so the useful chips lead.
@@ -615,10 +648,23 @@ function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
     return Object.values(m).sort((a,b)=>a.min-b.min);
   },[offers]);
   const lo=Math.min(...offers.map(o=>o.price)), hi=Math.max(...offers.map(o=>o.price));
+  const durs=offers.map(totalDur).filter(d=>d<9e8);
+  const dLo=Math.min(...durs), dHi=Math.max(...durs);
+  const dCap=flt.maxDur??dHi;
+  const byDest=useMemo(()=>{
+    const m={};
+    for(const o of offers){ const d=destAp(o); if(d) m[d]=(m[d]||0)+1; }
+    return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+  },[offers]);
+  const byConn=useMemo(()=>{
+    const m={};
+    for(const o of offers) for(const c of new Set(connAirports(o))) m[c]=(m[c]||0)+1;
+    return Object.entries(m).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  },[offers]);
   const cap=flt.maxPrice??hi;
   const upd=(patch)=>setFlt(f=>({...f,...patch}));
   const togList=(key,v)=>upd({[key]:flt[key].includes(v)?flt[key].filter(x=>x!==v):[...flt[key],v]});
-  const dirty=flt.stops!=="any"||flt.airlines.length||flt.maxPrice!=null||flt.outWin.length||flt.retWin.length||flt.sort!=="price"||flt.layover!=="any"||flt.minLayover!=="any"||flt.hideBasic||flt.needChecked;
+  const dirty=flt.stops!=="any"||flt.airlines.length||flt.maxPrice!=null||flt.outWin.length||flt.retWin.length||flt.sort!=="price"||flt.layover!=="any"||flt.minLayover!=="any"||flt.hideBasic||flt.needChecked||flt.outArr.length||flt.retArr.length||flt.noUS||flt.exclAirports.length||flt.maxDur!=null||flt.destAp.length;
   return (
     <div style={{background:SURFACE,border:`1px solid ${HAIR}`,borderRadius:10,padding:"12px 14px",marginBottom:14}}>
       <FGroup label="Sort">
@@ -646,12 +692,43 @@ function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
           onChange={e=>upd({maxPrice:+e.target.value>=hi?null:+e.target.value})}
           style={{width:"100%",maxWidth:340,accentColor:PRIMARY}}/>
       </FGroup>
+      <FGroup label={`Max travel time · ${durLabel(dCap)}${flt.maxDur==null?" (off)":""}`}>
+        <input type="range" min={Math.floor(dLo)} max={Math.ceil(dHi)} value={dCap}
+          onChange={e=>upd({maxDur:+e.target.value>=dHi?null:+e.target.value})}
+          style={{width:"100%",maxWidth:340,accentColor:PRIMARY}}/>
+      </FGroup>
+      {byDest.length>1&&(
+        <FGroup label="Arrival airport">
+          {byDest.map(([c,n])=>(
+            <Chip key={c} active={flt.destAp.includes(c)} on={()=>togList("destAp",c)}>{c} ({n})</Chip>
+          ))}
+        </FGroup>
+      )}
+      {byConn.length>0&&(
+        <FGroup label="Connections · tap to exclude">
+          <Chip active={flt.noUS} on={()=>upd({noUS:!flt.noUS})}>No US connections</Chip>
+          {byConn.map(([c,n])=>(
+            <Chip key={c} active={flt.exclAirports.includes(c)} on={()=>togList("exclAirports",c)}
+              title={flt.exclAirports.includes(c)?`excluding ${c}`:`exclude connections via ${c}`}>
+              {flt.exclAirports.includes(c)?"✕ ":""}via {c} ({n})
+            </Chip>
+          ))}
+        </FGroup>
+      )}
       <FGroup label="Outbound departs">
         {WINDOWS.map(([k,l])=><Chip key={k} active={flt.outWin.includes(k)} on={()=>togList("outWin",k)}>{l}</Chip>)}
+      </FGroup>
+      <FGroup label="Outbound arrives">
+        {WINDOWS.map(([k,l])=><Chip key={"oa"+k} active={flt.outArr.includes(k)} on={()=>togList("outArr",k)}>{l}</Chip>)}
       </FGroup>
       {hasReturn && (
         <FGroup label="Return departs">
           {WINDOWS.map(([k,l])=><Chip key={k} active={flt.retWin.includes(k)} on={()=>togList("retWin",k)}>{l}</Chip>)}
+        </FGroup>
+      )}
+      {hasReturn && (
+        <FGroup label="Return arrives">
+          {WINDOWS.map(([k,l])=><Chip key={"ra"+k} active={flt.retArr.includes(k)} on={()=>togList("retArr",k)}>{l}</Chip>)}
         </FGroup>
       )}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:2}}>
@@ -730,7 +807,13 @@ function FlightList({r,form,onPickPair,pairLoading}){
       (flt.layover==="any"||maxLayoverMin(o)<=+flt.layover) &&
       (flt.minLayover==="any"||minLayoverMin(o)>=+flt.minLayover) &&
       (!flt.hideBasic||!o.basic) &&
-      (!flt.needChecked||(o.baggage?.checked??0)>0)
+      (!flt.needChecked||(o.baggage?.checked??0)>0) &&
+      inWindows(flt.outArr,arrHour(o,0)) &&
+      inWindows(flt.retArr,arrHour(o,1)) &&
+      (!flt.noUS||!hasUSConnection(o)) &&
+      (!flt.exclAirports.length||!connAirports(o).some(c=>flt.exclAirports.includes(c))) &&
+      (flt.maxDur==null||totalDur(o)<=flt.maxDur) &&
+      (!flt.destAp.length||flt.destAp.includes(destAp(o)))
     );
     if(flt.sort==="dur") s=[...s].sort((a,b)=>totalDur(a)-totalDur(b));
     else if(flt.sort==="dep") s=[...s].sort((a,b)=>(depHour(a,0)??99)-(depHour(b,0)??99)||a.price-b.price);
