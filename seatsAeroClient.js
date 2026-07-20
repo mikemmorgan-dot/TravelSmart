@@ -5,6 +5,7 @@
 // Usage:
 //   export SEATS_AERO_KEY=pro_xxx        # rotate the one you pasted; read from env, never hardcoded
 //   node demo.js                         # offline parser demo (no network)
+const { expandMetro } = require("./metros");
 //   node -e "require('./seatsAeroClient').search({origin:'YYZ',destination:'MCO',start:'2026-08-01',end:'2026-08-14',sources:['aeroplan','united','flyingblue'],cabins:['economy']}).then(r=>console.log(JSON.stringify(r,null,2)))"
 
 const BASE = "https://seats.aero/partnerapi";
@@ -44,8 +45,8 @@ function key() {
 // One page of cached search. Returns { data, count, hasMore, cursor, callsRemaining }.
 async function searchPage(params, cursor) {
   const q = new URLSearchParams({
-    origin_airport: params.origin,
-    destination_airport: params.destination,
+    origin_airport: expandMetro(params.origin),
+    destination_airport: expandMetro(params.destination),
     take: String(params.take ?? 500),
     order_by: "lowest_mileage",
   });
