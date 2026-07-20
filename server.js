@@ -3,6 +3,7 @@
 //   node server.js                 # listens on :8787
 const http = require("http");
 const { optimizeTrip, genDates } = require("./orchestrator");
+const { cashToCAD, offersToCAD } = require("./fx");
 const { cheapestFunding, aviosEstimate } = require("./transferGraph");
 const { Cache, wrap, TTL } = require("./cache");
 const { search } = require("./seatsAeroClient");
