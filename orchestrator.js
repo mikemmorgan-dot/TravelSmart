@@ -147,7 +147,7 @@ async function optimizeTrip(cfg, deps) {
   const grid = [];
   pairs.forEach(({ dep, ret }, i) => {
     const cash = cashResults[i];
-    if (!cash) return; // pair's cash call failed after retries — omit from grid
+    if (!cash || !(cash.price > 0)) return; // no cash, or zero/absent price (unbookable/far-future) — omit
     const outC = legCandidates(outboundByDate[dep] || [], { balances, valuations, awardTax, cheapestFunding, asOf, pax });
     const inC = legCandidates(returnByDate[ret] || [], { balances, valuations, awardTax, cheapestFunding, asOf, pax });
     const sol = solveRoundTrip(outC, inC, balances);

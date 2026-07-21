@@ -59,7 +59,7 @@ async function yearScan(cfg, deps, opts = {}) {
         aviosViable: cfg.aviosViable,
       }, deps);
       const g = r.best || (r.grid && r.grid[0]);
-      if (!g) return { ...s, skipped: true };
+      if (!g || !(g.bestEcon > 0)) return { ...s, skipped: true }; // no priced pair this sample
       return {
         ...s, bestEcon: g.bestEcon, winner: g.winner,
         points: g.bestPoints ?? null, cash: g.cash ? g.cash.price : null,
@@ -72,7 +72,7 @@ async function yearScan(cfg, deps, opts = {}) {
   const byMonth = {};
   let skipped = 0;
   for (const p of priced) {
-    if (p.skipped || p.bestEcon == null) { skipped++; continue; }
+    if (p.skipped || !(p.bestEcon > 0)) { skipped++; continue; }
     const cur = byMonth[p.monthKey];
     if (!cur || p.bestEcon < cur.bestEcon) byMonth[p.monthKey] = p;
   }
