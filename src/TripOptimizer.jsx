@@ -757,6 +757,27 @@ function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
 }
 
 // ---- Flex window for cash: cheapest cash fare per date pair; tap a cell to load its flights ----
+// Names the winning date pair(s) so the user isn't eyeballing a 5x5 grid.
+// Google-style "cheapest dates" leader — tap to jump straight to it.
+function BestDates({picks}){
+  const day=(iso)=>{ const d=new Date(iso+"T12:00:00");
+    return d.toLocaleDateString("en-CA",{weekday:"short",month:"short",day:"numeric"}); };
+  return (
+    <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+      {picks.map((p,i)=>(
+        <button key={i} onClick={p.onGo}
+          style={{flex:"1 1 200px",textAlign:"left",cursor:"pointer",background:SURFACE,
+            border:`1.5px solid ${p.accent}`,borderRadius:10,padding:"10px 12px"}}>
+          <div style={{fontFamily:mono,fontSize:10,letterSpacing:"0.1em",textTransform:"uppercase",color:p.accent,fontWeight:700}}>{p.label}</div>
+          <div style={{fontSize:15,fontWeight:800,margin:"3px 0 1px"}}>{p.value}</div>
+          <div style={{fontFamily:mono,fontSize:11,color:MUTED}}>{day(p.dep)} → {day(p.ret)}</div>
+          {p.sub&&<div style={{fontFamily:mono,fontSize:10,color:MUTED,marginTop:2}}>{p.sub}</div>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function CashMatrix({grid,sel,onSel,route,loading}){
   const deps=[...new Set(grid.map(g=>g.dep))].sort();
   const rets=[...new Set(grid.map(g=>g.ret))].sort();
@@ -764,8 +785,16 @@ function CashMatrix({grid,sel,onSel,route,loading}){
   const prices=grid.map(g=>g.price); const lo=Math.min(...prices), hi=Math.max(...prices);
   const shade=(p)=>{ const t=hi===lo?0:(p-lo)/(hi-lo); return `hsl(75,${28-18*t}%,${52+28*t}%)`; };
   const md=(d)=>d.slice(5);
+  const cheapest=grid.reduce((m,g)=>g.price<m.price?g:m,grid[0]);
   return (
     <div style={{marginBottom:14,opacity:loading?0.55:1,transition:"opacity 0.2s"}}>
+      {cheapest&&<BestDates picks={[{
+        label:"Cheapest dates", accent:BEST,
+        value:money(cheapest.price,cheapest.currency),
+        dep:cheapest.dep, ret:cheapest.ret,
+        sub:hi>lo?`up to ${money(hi-lo,cheapest.currency)} more on other dates`:null,
+        onGo:()=>onSel(cheapest.dep,cheapest.ret),
+      }]}/>}
       <div style={{fontFamily:mono,fontSize:11,letterSpacing:"0.12em",color:MUTED,textTransform:"uppercase",marginBottom:8}}>
         Flex window · cheapest cash per date pair{route?` · ${route}`:""}{loading?" · loading…":""}
       </div>
@@ -1173,8 +1202,9 @@ function Results({r,balances,form}){
 
 // ---- Tapped-cell breakdown: cash vs points for one date pair, always both sides ----
 function PairDetail({g,balances,O,D,pax}){
-  const ref=g.award||g.awardRef;                 // feasible solve, else unconstrained reference
-  const feasible=!!g.award;
+  let ref=g.award||g.awardRef;                   // feasible solve, else unconstrained reference
+  if(ref && (!ref.outLeg||!ref.inLeg)) ref=null; // malformed/partial award cell — show cash only
+  const feasible=!!(g.award&&g.award.outLeg&&g.award.inLeg);
   const bal=Object.fromEntries((balances||[]).map(b=>[b.program,Number(b.amount)||0]));
   const shorts=ref&&!feasible
     ? Object.entries(ref.draws).map(([src,need])=>({src,need,have:bal[src]??0,short:Math.max(0,need-(bal[src]??0))})).filter(s=>s.short>0)
@@ -1271,10 +1301,32 @@ function Matrix({grid,sel,onSel}){
   const by={}; grid.forEach(g=>by[g.dep+"|"+g.ret]=g);
   const econs=grid.map(g=>g.bestEcon); const lo=Math.min(...econs), hi=Math.max(...econs);
   const best=grid.reduce((m,g)=>g.bestEcon<m.bestEcon?g:m,grid[0]);
+  // Two distinct optima the tester called out: fewest points spent vs. best cents/point value.
+  const awardCells=grid.filter(g=>g.bestPoints!=null && (g.winner==="award"||g.winner==="mixed"));
+  const fewestPts=awardCells.length?awardCells.reduce((m,g)=>g.bestPoints<m.bestPoints?g:m):null;
+  const bestValue=awardCells.length?awardCells.reduce((m,g)=>(g.cppCaptured??0)>(m.cppCaptured??0)?g:m):null;
+  const cheapestOverall=grid.reduce((m,g)=>g.bestEcon<m.bestEcon?g:m,grid[0]);
   const shade=(e)=>{ const t=hi===lo?0:(e-lo)/(hi-lo); // green(cheap)->paper(dear)
     const g=Math.round(11+t*(233-11)), r=Math.round(122+t*(233-122)); return `rgb(${r},${Math.round(122+t*111)},${Math.round(75+t*158)})`; };
+  const picks=[];
+  if(cheapestOverall) picks.push({ label:"Lowest all-in cost", accent:BEST,
+    value:cad(cheapestOverall.bestEcon), dep:cheapestOverall.dep, ret:cheapestOverall.ret,
+    sub:cheapestOverall.winner==="award"?"pay with points":cheapestOverall.winner==="mixed"?"points + cash":"pay cash",
+    onGo:()=>onSel(cheapestOverall.dep+"|"+cheapestOverall.ret) });
+  if(fewestPts && !(fewestPts.dep===cheapestOverall?.dep&&fewestPts.ret===cheapestOverall?.ret))
+    picks.push({ label:"Fewest points", accent:PRIMARY,
+      value:`${fmt(fewestPts.bestPoints)} pts`, dep:fewestPts.dep, ret:fewestPts.ret,
+      sub:fewestPts.cash?`+ ${cad(fewestPts.cash.taxes||0)} taxes`:null,
+      onGo:()=>onSel(fewestPts.dep+"|"+fewestPts.ret) });
+  if(bestValue && bestValue.cppCaptured &&
+     !(bestValue.dep===cheapestOverall?.dep&&bestValue.ret===cheapestOverall?.ret) &&
+     !(bestValue.dep===fewestPts?.dep&&bestValue.ret===fewestPts?.ret))
+    picks.push({ label:"Best point value", accent:POS,
+      value:`${bestValue.cppCaptured.toFixed(1)}¢/pt`, dep:bestValue.dep, ret:bestValue.ret,
+      sub:`${fmt(bestValue.bestPoints)} pts`, onGo:()=>onSel(bestValue.dep+"|"+bestValue.ret) });
   return (
     <div>
+      {picks.length>0 && <BestDates picks={picks}/>}
       <h2 style={{fontSize:12,fontFamily:mono,letterSpacing:"0.14em",textTransform:"uppercase",color:MUTED,margin:"0 0 10px"}}>
         Flex window · cheapest per date pair
       </h2>
