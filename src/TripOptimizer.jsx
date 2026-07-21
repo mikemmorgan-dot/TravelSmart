@@ -349,8 +349,7 @@ export default function TripOptimizer(){
       party:{adults:Number(form.adults), children:Number(form.children)}, cabin:form.cabin,
       sources:["aeroplan","flyingblue","american","qatar"],
       balances:Object.fromEntries(balances.map(b=>[b.program,Number(b.amount)])),
-      valuations:Object.fromEntries(balances.map(b=>[b.program,Number(b.value)])),
-      aviosDistance:1187, awardTax:{Aeroplan:80,"Flying Blue":90,American:50,"BA Avios":60,Qatar:60},
+      valuations:Object.fromEntries(balances.map(b=>[b.program,Number(b.value)])), awardTax:{Aeroplan:80,"Flying Blue":90,American:50,"BA Avios":60,Qatar:60},
       asOf:new Date().toISOString().slice(0,10) };
     try{
       const res=await fetch(`${API_BASE}/optimize`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(cfg)});
