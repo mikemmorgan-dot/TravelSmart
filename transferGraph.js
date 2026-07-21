@@ -32,13 +32,36 @@ const BONUSES = [
 
 // Avios is distance-based, so we price it ourselves (Seats.aero can't).
 // BA Club partner economy off-peak bands — ESTIMATE, verify on ba.com (pricing shifts peak/off-peak).
-function aviosEstimate(distanceMiles) {
-  const bands = [
-    { max: 650, points: 5000 }, { max: 1151, points: 6500 },
-    { max: 2000, points: 9000 }, { max: 3000, points: 13000 },
-  ];
-  const b = bands.find((x) => distanceMiles <= x.max);
-  return { points: b ? b.points : null, verified: false, note: "off-peak economy estimate; confirm on ba.com" };
+const { baRouting } = require("./distances");
+
+// BA prices Avios per SEGMENT by distance band. Post-Dec-2025 chart, one-way economy,
+// anchored to published from-London rates (Paris/Milan 10k, Rome/Barcelona 13k,
+// Athens/Istanbul 15k, NYC/Boston/Toronto 27.5k, LA/Miami 33k, Tokyo/HK 38.5k,
+// Singapore 44k, Sydney 55k). Estimates blend off-peak/peak toward off-peak.
+const AVIOS_BANDS = [
+  { max: 650, points: 10000 }, { max: 1150, points: 13000 }, { max: 2000, points: 15000 },
+  { max: 3000, points: 20000 }, { max: 4000, points: 27500 }, { max: 5500, points: 33000 },
+  { max: 6500, points: 38500 }, { max: 7500, points: 44000 }, { max: Infinity, points: 55000 },
+];
+const bandPoints = (mi) => AVIOS_BANDS.find((b) => mi <= b.max).points;
+
+// aviosEstimate(origin, destination) -> one-way, per person:
+//   points     — summed per-segment Avios via BA's London routing
+//   surcharge  — CAD taxes/YQ estimate per direction (BA loads heavy fuel surcharges on
+//                long-haul: ~C$180-220/direction economy post-May-2026; intra-Europe ~C$40)
+// Returns { points: null } when BA routing isn't sane for the city pair (huge LHR detour)
+// or an airport is unknown — the engine then simply skips the Avios fallback.
+function aviosEstimate(origin, destination) {
+  const r = baRouting(origin, destination);
+  if (!r.viable) {
+    return { points: null, verified: false,
+      note: r.detour ? "BA routing via London is impractical for this pair" : "route unknown to estimator" };
+  }
+  const points = r.segments.reduce((sum, mi) => sum + bandPoints(mi), 0);
+  const longHaul = r.segments.some((mi) => mi > 2000);
+  const surcharge = longHaul ? 200 : 40;
+  return { points, surcharge, verified: false,
+    note: `economy estimate via ${r.segments.length > 1 ? "LHR connection" : "nonstop"} · incl. ~C$${surcharge}/direction BA surcharges · confirm on ba.com` };
 }
 
 function activeBonus(from, to, asOf = new Date()) {

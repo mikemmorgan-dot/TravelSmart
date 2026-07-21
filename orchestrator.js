@@ -80,13 +80,13 @@ async function optimizeTrip(cfg, deps) {
 
   // Inject the Avios fallback Seats.aero is blind to — but ONLY where Avios is actually viable
   // (a oneworld nonstop or sane connection exists). For routes like YYZ-MCO it isn't, so skip it.
-  const avios = aviosEstimate(aviosDistance);
+  const avios = aviosEstimate(origin, destination); // per-segment banding + surcharge model
   const aviosOK = cfg.aviosViable !== false && avios.points != null;
   const withAvios = (arr, dates) => {
     if (!aviosOK) return arr;
     const extra = dates.map((d) => ({
       program: "BA Avios", points: avios.points, date: d, seats: null,
-      direct: true, estimated: true, taxes: awardTax["BA Avios"],
+      direct: true, estimated: true, taxes: avios.surcharge ?? awardTax["BA Avios"],
     }));
     return arr.concat(extra);
   };
