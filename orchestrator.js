@@ -165,7 +165,10 @@ async function optimizeTrip(cfg, deps) {
     const winner = award && award.econ < cashEcon ? "award" : "cash";
     const byProgram = programSummary(outboundByDate[dep] || [], returnByDate[ret] || [],
       { pax, awardTax, balances, cheapestFunding, asOf });
-    grid.push({ dep, ret, cash, award, winner, byProgram, bestEcon: Math.min(cashEcon, award ? award.econ : Infinity) });
+    grid.push({ dep, ret, cash, award, winner, byProgram,
+      bestEcon: Math.min(cashEcon, award ? award.econ : Infinity),
+      bestPoints: award ? award.totalPts : null,
+      cppCaptured: award ? award.cppCaptured : null });
   });
 
   grid.sort((a, b) => a.bestEcon - b.bestEcon);
