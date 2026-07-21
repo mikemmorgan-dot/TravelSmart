@@ -541,6 +541,15 @@ export default function TripOptimizer(){
 
 // ---- Cash mode: render every offer the engine returned, cheapest first ----
 const hhmm=(iso)=>iso?iso.slice(11,16):"—";
+// "Mon, Dec 22" from a local ISO — sliced, never Date-constructed, so no TZ shift.
+const WD=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"], MO=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const dateLabel=(iso)=>{ if(!iso) return ""; const [y,m,d]=iso.slice(0,10).split("-").map(Number);
+  const wd=new Date(Date.UTC(y,m-1,d)).getUTCDay(); return `${WD[wd]}, ${MO[m-1]} ${d}`; };
+// Whole-day delta between two local ISO datetimes (for the "+1" overnight badge).
+const dayDelta=(a,b)=>{ if(!a||!b) return 0;
+  const da=Date.UTC(...a.slice(0,10).split("-").map((n,i)=>i===1?+n-1:+n));
+  const db=Date.UTC(...b.slice(0,10).split("-").map((n,i)=>i===1?+n-1:+n));
+  return Math.round((db-da)/864e5); };
 const dur=(d)=>{ if(!d) return "";
   const m=d.match(/P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?/); if(!m) return d;
   const h=(+m[1]||0)*24+(+m[2]||0), mm=+m[3]||0;
@@ -575,9 +584,13 @@ function Slice({s,label}){
   const lays=segs.slice(1).map((g,k)=>({at:g.from, len:gapDur(segs[k].arrive,g.depart)}));
   return (
     <div style={{flex:1,minWidth:230}}>
-      <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>{label}</div>
+      <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>
+        {label}{first.depart?<span style={{color:INK,marginLeft:6}}>{dateLabel(first.depart)}</span>:null}
+      </div>
       <div style={{fontWeight:700,fontSize:15,marginTop:3}}>
         {hhmm(first.depart)} {first.from} → {hhmm(last.arrive)} {last.to}
+        {(()=>{ const d=dayDelta(first.depart,last.arrive);
+          return d>0?<sup style={{color:BEST,fontSize:10,fontWeight:800,marginLeft:2}}>+{d}</sup>:null; })()}
       </div>
       <div style={{fontFamily:mono,fontSize:11.5,color:MUTED,marginTop:2}}>
         {dur(s.duration)} total · {s.stops===0?"nonstop":`${s.stops} stop${s.stops>1?"s":""}`} · {segs.map(g=>`${g.carrier}${g.number||""}`).join(" · ")}
@@ -1229,7 +1242,10 @@ function OfferDetail({o,form,balances,onAwardCheck}){
               <div style={{display:"flex",flexWrap:"wrap",gap:"4px 14px",alignItems:"baseline",marginTop:4}}>
                 <span style={{fontFamily:mono,fontSize:12,fontWeight:700,minWidth:118}}>
                   {hhmm(g.depart)} {g.from} → {hhmm(g.arrive)} {g.to}
+                  {(()=>{ const d=dayDelta(g.depart,g.arrive);
+                    return d>0?<sup style={{color:BEST,fontSize:9,fontWeight:800,marginLeft:1}}>+{d}</sup>:null; })()}
                 </span>
+                <span style={{fontFamily:mono,fontSize:10,color:MUTED}}>{dateLabel(g.depart)}</span>
                 <span style={{fontFamily:mono,fontSize:11,color:MUTED}}>
                   {(g.marketing||g.carrier)||""}{g.marketingNumber||g.number||""}
                   {g.carrierName?` · ${g.carrierName}`:""}
