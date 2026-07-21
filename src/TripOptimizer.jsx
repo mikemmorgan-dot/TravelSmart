@@ -270,7 +270,13 @@ export default function TripOptimizer(){
   const state=states[mode==="cash"?"flights":"optimize"];
   const setState=(s)=>setStates(prev=>({...prev,[s.kind]:s}));
 
-  const upd=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const upd=(k,v)=>setForm(f=>{
+    const nf={...f,[k]:v};
+    // Keep the trip forward in time: return can never precede depart.
+    if(k==="depart" && nf.return && nf.return<v) nf.return=v;        // push return up to match
+    if(k==="return" && nf.depart && v<nf.depart) nf.depart=v;        // or pull depart back
+    return nf;
+  });
   const updBal=(i,k,v)=>setBalances(b=>b.map((x,j)=>{
     if(j!==i) return x;
     if(k==="program") return {...x, program:v, value:PROG_DEFAULT_CPP[v] ?? x.value}; // new program -> its default ¢/pt
@@ -405,8 +411,8 @@ export default function TripOptimizer(){
             <Row><Field label="From"><AirportField v={form.origin} on={v=>upd("origin",v)}/></Field>
               <Field label="To"><AirportField v={form.destination} on={v=>upd("destination",v)}/></Field>
               <Field label="Cabin"><Sel v={form.cabin} on={v=>upd("cabin",v)} opts={["economy","business"]}/></Field></Row>
-            <Row><Field label="Depart"><In type="date" v={form.depart} on={v=>upd("depart",v)} w={140}/></Field>
-              <Field label="Return"><In type="date" v={form.return} on={v=>upd("return",v)} w={140}/></Field></Row>
+            <Row><Field label="Depart"><In type="date" v={form.depart} on={v=>upd("depart",v)} w={140} min={todayISO()}/></Field>
+              <Field label="Return"><In type="date" v={form.return} on={v=>upd("return",v)} w={140} min={form.depart||todayISO()}/></Field></Row>
             <Row><Field label="Flex ±days"><Sel v={form.flexDays} on={v=>upd("flexDays",v)} opts={["0","1","2","3"]}/></Field>
               <Field label="Adults"><In type="number" v={form.adults} on={v=>upd("adults",v)} w={56}/></Field>
               <Field label="Children"><In type="number" v={form.children} on={v=>upd("children",v)} w={56}/></Field></Row>
@@ -495,6 +501,7 @@ const AIRLINES={
   AM:"Aeromexico",CM:"Copa",AV:"Avianca",LA:"LATAM",Y4:"Volaris",BW:"Caribbean Airlines",
   ZZ:"Duffel Airways (test)",ZX:"Duffel Airways (test)"};
 const airline=(c)=>AIRLINES[c]||c||"—";
+const todayISO=()=>{ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 
 // City lookup from the airports dataset: "PHL" → "Philadelphia"
 const CITY=new Map(AIRPORTS.map(a=>[a[0],a[2]||a[1]]));
@@ -1315,8 +1322,8 @@ function Panel({title,sub,children}){ return (
 const Row=({children})=> <div style={{display:"flex",gap:6,marginBottom:8,alignItems:"flex-end",flexWrap:"wrap"}}>{children}</div>;
 function Field({label,children}){ return <label style={{display:"flex",flexDirection:"column",gap:3}}>
   <span style={{fontFamily:mono,fontSize:9,letterSpacing:"0.06em",color:MUTED,textTransform:"uppercase"}}>{label}</span>{children}</label>; }
-function In({v,on,type="text",w,flex,m,right,bold,step}){ return (
-  <input type={type} value={v} step={step} onChange={e=>on(e.target.value)}
+function In({v,on,type="text",w,flex,m,right,bold,step,min}){ return (
+  <input type={type} value={v} step={step} min={min} onChange={e=>on(e.target.value)}
     style={{border:`1px solid ${HAIR}`,background:SURFACE,borderRadius:4,padding:"7px 8px",fontSize:13,color:INK,
       outline:"none",width:w,flex,minWidth:0,fontFamily:m?mono:sans,textAlign:right?"right":"left",fontWeight:bold?600:400}}/> ); }
 function Sel({v,on,opts}){ return (
