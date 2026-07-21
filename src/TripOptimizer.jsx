@@ -266,15 +266,24 @@ export default function TripOptimizer(){
   const [mode,setMode]=useState("cash"); // "cash" = all flights, cash price · "optimize" = points engine
   // Results live per-tab so switching cash <-> points never discards either side.
   const IDLE={status:"idle", kind:null, data:null, sample:false, err:null};
-  const [states,setStates]=useState({flights:IDLE, optimize:IDLE});
-  const state=states[mode==="cash"?"flights":"optimize"];
+  const [states,setStates]=useState({flights:IDLE, optimize:IDLE, year:IDLE});
+  const slot=mode==="cash"?"flights":mode==="optimize"?"optimize":"year";
+  const state=states[slot];
   const setState=(s)=>setStates(prev=>({...prev,[s.kind]:s}));
 
   const upd=(k,v)=>setForm(f=>{
     const nf={...f,[k]:v};
-    // Keep the trip forward in time: return can never precede depart.
-    if(k==="depart" && nf.return && nf.return<v) nf.return=v;        // push return up to match
-    if(k==="return" && nf.depart && v<nf.depart) nf.depart=v;        // or pull depart back
+    // Moving departure carries the return with it, preserving trip length (Google-style).
+    // This also keeps the return in step with departure's month, so its picker opens there.
+    if(k==="depart" && f.depart && nf.return){
+      const nights=Math.round((new Date(f.return)-new Date(f.depart))/864e5);
+      if(nights>0){
+        const nr=new Date(new Date(v).getTime()+nights*864e5);
+        nf.return=nr.toISOString().slice(0,10);
+      } else if(nf.return<v){ nf.return=v; }
+    } else if(k==="depart" && nf.return && nf.return<v){ nf.return=v; }
+    // Editing return directly: only guard against it preceding departure.
+    if(k==="return" && nf.depart && v<nf.depart) nf.depart=v;
     return nf;
   });
   const updBal=(i,k,v)=>setBalances(b=>b.map((x,j)=>{
@@ -339,9 +348,32 @@ export default function TripOptimizer(){
     }finally{ setPairLoading(false); }
   }
 
+  const tripLenDays=()=>{
+    const a=new Date(form.depart), b=new Date(form.return||form.depart);
+    return Math.max(1,Math.round((b-a)/864e5))||7;
+  };
+  async function runYear(){
+    if(state.status==="loading") return;
+    setState({status:"loading", kind:"year", data:null, sample:false, err:null});
+    const cfg={ origin:String(form.origin).split(",")[0], destination:String(form.destination).split(",")[0],
+      party:{adults:Number(form.adults), children:Number(form.children)}, cabin:form.cabin,
+      tripLenDays:tripLenDays(), sources:["aeroplan","flyingblue","american","qatar"],
+      balances:Object.fromEntries(balances.map(b=>[b.program,Number(b.amount)])),
+      valuations:Object.fromEntries(balances.map(b=>[b.program,Number(b.value)])),
+      awardTax:{Aeroplan:80,"Flying Blue":90,American:50,"BA Avios":60,Qatar:60} };
+    try{
+      const res=await fetch(`${API_BASE}/year`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(cfg)});
+      if(!res.ok) throw new Error(await errText(res));
+      const data=await res.json();
+      setState({status:"done", kind:"year", data, sample:false, err:null});
+    }catch(e){
+      setState({status:"done", kind:"year", data:null, sample:false, err:friendly(e.message)});
+    }
+  }
   async function run(refreshing=false){
     if(!refreshing && state.status==="loading") return; // ignore extra taps
     if(mode==="cash") return runCash();
+    if(mode==="year") return runYear();
     const token=refreshing?runToken.current:++runToken.current;
     if(!refreshing){ refreshTries.current=0; setState({status:"loading", kind:"optimize", data:null, sample:false, err:null}); }
     const cfg={ origin:String(form.origin).split(",")[0], destination:String(form.destination).split(",")[0],
@@ -393,7 +425,7 @@ export default function TripOptimizer(){
 
         {/* mode toggle */}
         <div style={{display:"flex",gap:8,marginTop:18}}>
-          {[["cash","Cash flights"],["optimize","Points optimizer"]].map(([k,label])=>(
+          {[["cash","Cash flights"],["optimize","Points optimizer"],["year","Year view"]].map(([k,label])=>(
             <button key={k} onClick={()=>setMode(k)}
               style={{fontFamily:mono,fontSize:11,letterSpacing:"0.08em",textTransform:"uppercase",
                 padding:"7px 14px",borderRadius:6,cursor:"pointer",fontWeight:700,
@@ -423,8 +455,22 @@ export default function TripOptimizer(){
                 {state.status==="loading"?<><span className="ts-spin"/>Searching…</>:"Show all flights"}
               </button>
             )}
+            {mode==="year" && (
+              <button onClick={()=>run()} disabled={state.status==="loading"}
+                style={{marginTop:10,width:"100%",background:PRIMARY,color:"#fff",border:"none",
+                borderRadius:6,padding:"11px 0",fontSize:14,fontWeight:700,fontFamily:sans,
+                cursor:state.status==="loading"?"wait":"pointer",opacity:state.status==="loading"?0.65:1}}>
+                {state.status==="loading"?<><span className="ts-spin"/>Scanning 12 months… ~2 min</>:"Find cheapest month"}
+              </button>
+            )}
+            {mode==="year" && (
+              <div style={{fontFamily:mono,fontSize:10.5,color:MUTED,marginTop:8,lineHeight:1.5}}>
+                Prices ~2 dates/month across the next year at your current trip length
+                ({tripLenDays()} nights). Uses your balances for all-in comparison.
+              </div>
+            )}
           </Panel>
-          {mode==="optimize" && (
+          {(mode==="optimize"||mode==="year") && (
           <Panel title="Your balances" sub="program · points · ¢/pt">
             {balances.map((b,i)=>{
               const taken=new Set(balances.map(x=>x.program));
@@ -472,6 +518,12 @@ export default function TripOptimizer(){
           onPickPair={(dep,ret)=>runCash({dep,ret})} pairLoading={pairLoading}
           onAwardCheck={()=>{ pendingAward.current=true; setMode("optimize"); }}/>}
         {mode==="optimize" && state.data && <Results r={state.data} balances={balances} form={form}/>}
+        {mode==="year" && state.err && !state.data && (
+          <Banner color={DANGER} bg="var(--err-bg)" bd="var(--err-bd)">{state.err}</Banner>
+        )}
+        {mode==="year" && state.data && <YearView r={state.data} form={form} onPickMonth={(dep,ret)=>{
+          upd("depart",dep); upd("return",ret); setMode("cash"); setTimeout(()=>runCash({dep,ret}),60);
+        }}/>}
         <WatchPanel form={form}/>
         {state.status==="idle" && <Empty/>}
       </div>
@@ -899,6 +951,61 @@ function PayWithPoints({o,balances,onAwardCheck}){
           Check award space for these dates →
         </button>
       )}
+    </div>
+  );
+}
+
+// Year view: 12-month all-in price bars, Google-style. Tap a month to drill into its dates.
+function YearView({r,form,onPickMonth}){
+  const months=r.months||[];
+  if(!months.length) return (
+    <div style={{fontFamily:mono,fontSize:12,color:MUTED,padding:"12px 0"}}>
+      No priced months came back — the route may have no bookable inventory yet, or the scan timed out. Try again in a moment.
+    </div>
+  );
+  const lo=Math.min(...months.map(m=>m.bestEcon)), hi=Math.max(...months.map(m=>m.bestEcon));
+  const cheapest=months.reduce((a,b)=>b.bestEcon<a.bestEcon?b:a);
+  const mLabel=(k)=>{ const [y,mo]=k.split("-"); return new Date(Date.UTC(+y,+mo-1,1))
+    .toLocaleDateString("en-CA",{month:"short",year:"2-digit"}); };
+  const nights=(()=>{ const a=new Date(form.depart),b=new Date(form.return||form.depart);
+    return Math.max(1,Math.round((b-a)/864e5))||7; })();
+  return (
+    <div>
+      <BestDates picks={[{
+        label:"Cheapest month", accent:BEST,
+        value:cad(cheapest.bestEcon)+(cheapest.points?` + ${fmt(cheapest.points)} pts`:""),
+        dep:cheapest.dep, ret:cheapest.ret,
+        sub:`${cheapest.winner==="award"?"pay with points":cheapest.winner==="mixed"?"points + cash":"pay cash"} · tap to see this month`,
+        onGo:()=>onPickMonth(cheapest.dep,cheapest.ret),
+      }]}/>
+      <div style={{fontFamily:mono,fontSize:11,letterSpacing:"0.12em",color:MUTED,textTransform:"uppercase",margin:"4px 0 10px"}}>
+        Cheapest all-in per month · {String(form.origin).split(",")[0]} ⇄ {String(form.destination).split(",")[0]} · ~{nights} nights
+        {r.budgetHit?" · (partial — scan hit time limit)":""}
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        {months.map(m=>{
+          const frac=hi>lo?(m.bestEcon-lo)/(hi-lo):0;
+          const isLow=m.monthKey===cheapest.monthKey;
+          return (
+            <button key={m.monthKey} onClick={()=>onPickMonth(m.dep,m.ret)}
+              style={{display:"flex",alignItems:"center",gap:10,background:"none",border:"none",cursor:"pointer",padding:"2px 0",textAlign:"left"}}>
+              <span style={{fontFamily:mono,fontSize:12,width:58,color:isLow?BEST:INK,fontWeight:isLow?800:400}}>{mLabel(m.monthKey)}</span>
+              <span style={{flex:1,height:22,background:SURFACE,borderRadius:5,overflow:"hidden",position:"relative"}}>
+                <span style={{position:"absolute",inset:0,width:`${18+frac*82}%`,
+                  background:isLow?BEST:(frac<0.4?POS:frac<0.75?"#d9a441":DANGER),
+                  opacity:isLow?1:0.55,borderRadius:5,transition:"width 0.3s"}}/>
+              </span>
+              <span style={{fontFamily:mono,fontSize:12,fontWeight:700,width:106,textAlign:"right",color:isLow?BEST:INK}}>
+                {cad(m.bestEcon)}{m.points?<span style={{fontSize:9,color:MUTED,fontWeight:400}}> +{fmt(m.points)}p</span>:null}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{fontFamily:mono,fontSize:10,color:MUTED,marginTop:10,lineHeight:1.5}}>
+        Each bar = the cheaper of ~2 sampled date pairs that month, priced all-in (cash vs points).
+        A sample isn't a guarantee every date matches — tap a month to search its exact dates.
+      </div>
     </div>
   );
 }
