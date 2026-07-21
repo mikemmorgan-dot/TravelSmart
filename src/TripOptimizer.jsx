@@ -963,8 +963,14 @@ function YearView({r,form,onPickMonth}){
       No priced months came back — the route may have no bookable inventory yet, or the scan timed out. Try again in a moment.
     </div>
   );
-  const lo=Math.min(...months.map(m=>m.bestEcon)), hi=Math.max(...months.map(m=>m.bestEcon));
-  const cheapest=months.reduce((a,b)=>b.bestEcon<a.bestEcon?b:a);
+  const priced=months.filter(m=>m.bestEcon>0);
+  if(!priced.length) return (
+    <div style={{fontFamily:mono,fontSize:12,color:MUTED,padding:"12px 0"}}>
+      No priced months came back — the route may have no bookable inventory in this window yet. Try a shorter trip length or check back later.
+    </div>
+  );
+  const lo=Math.min(...priced.map(m=>m.bestEcon)), hi=Math.max(...priced.map(m=>m.bestEcon));
+  const cheapest=priced.reduce((a,b)=>b.bestEcon<a.bestEcon?b:a);
   const mLabel=(k)=>{ const [y,mo]=k.split("-"); return new Date(Date.UTC(+y,+mo-1,1))
     .toLocaleDateString("en-CA",{month:"short",year:"2-digit"}); };
   const nights=(()=>{ const a=new Date(form.depart),b=new Date(form.return||form.depart);
@@ -984,19 +990,21 @@ function YearView({r,form,onPickMonth}){
       </div>
       <div style={{display:"flex",flexDirection:"column",gap:6}}>
         {months.map(m=>{
-          const frac=hi>lo?(m.bestEcon-lo)/(hi-lo):0;
-          const isLow=m.monthKey===cheapest.monthKey;
+          const has=m.bestEcon>0;
+          const frac=has&&hi>lo?(m.bestEcon-lo)/(hi-lo):0;
+          const isLow=has&&m.monthKey===cheapest.monthKey;
           return (
-            <button key={m.monthKey} onClick={()=>onPickMonth(m.dep,m.ret)}
-              style={{display:"flex",alignItems:"center",gap:10,background:"none",border:"none",cursor:"pointer",padding:"2px 0",textAlign:"left"}}>
+            <button key={m.monthKey} onClick={()=>has&&onPickMonth(m.dep,m.ret)} disabled={!has}
+              style={{display:"flex",alignItems:"center",gap:10,background:"none",border:"none",
+                cursor:has?"pointer":"default",padding:"2px 0",textAlign:"left",opacity:has?1:0.5}}>
               <span style={{fontFamily:mono,fontSize:12,width:58,color:isLow?BEST:INK,fontWeight:isLow?800:400}}>{mLabel(m.monthKey)}</span>
               <span style={{flex:1,height:22,background:SURFACE,borderRadius:5,overflow:"hidden",position:"relative"}}>
-                <span style={{position:"absolute",inset:0,width:`${18+frac*82}%`,
+                {has&&<span style={{position:"absolute",inset:0,width:`${18+frac*82}%`,
                   background:isLow?BEST:(frac<0.4?POS:frac<0.75?"#d9a441":DANGER),
-                  opacity:isLow?1:0.55,borderRadius:5,transition:"width 0.3s"}}/>
+                  opacity:isLow?1:0.55,borderRadius:5,transition:"width 0.3s"}}/>}
               </span>
-              <span style={{fontFamily:mono,fontSize:12,fontWeight:700,width:106,textAlign:"right",color:isLow?BEST:INK}}>
-                {cad(m.bestEcon)}{m.points?<span style={{fontSize:9,color:MUTED,fontWeight:400}}> +{fmt(m.points)}p</span>:null}
+              <span style={{fontFamily:mono,fontSize:12,fontWeight:700,width:106,textAlign:"right",color:has?(isLow?BEST:INK):MUTED}}>
+                {has?<>{cad(m.bestEcon)}{m.points?<span style={{fontSize:9,color:MUTED,fontWeight:400}}> +{fmt(m.points)}p</span>:null}</>:"—"}
               </span>
             </button>
           );
@@ -1005,6 +1013,7 @@ function YearView({r,form,onPickMonth}){
       <div style={{fontFamily:mono,fontSize:10,color:MUTED,marginTop:10,lineHeight:1.5}}>
         Each bar = the cheaper of ~2 sampled date pairs that month, priced all-in (cash vs points).
         A sample isn't a guarantee every date matches — tap a month to search its exact dates.
+        “—” means no bookable fare was found that month (usually too soon to depart, or beyond the airline’s schedule window).
       </div>
     </div>
   );
