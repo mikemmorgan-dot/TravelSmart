@@ -983,7 +983,7 @@ function YearView({r,form,onPickMonth,onRefresh}){
   const lo=Math.min(...priced.map(m=>m.bestEcon)), hi=Math.max(...priced.map(m=>m.bestEcon));
   const cheapest=priced.reduce((a,b)=>b.bestEcon<a.bestEcon?b:a);
   const mLabel=(k)=>{ const [y,mo]=k.split("-"); return new Date(Date.UTC(+y,+mo-1,1))
-    .toLocaleDateString("en-CA",{month:"short",year:"2-digit"}); };
+    .toLocaleDateString("en-CA",{month:"short",year:"2-digit",timeZone:"UTC"}); };
   const nights=(()=>{ const a=new Date(form.depart),b=new Date(form.return||form.depart);
     return Math.max(1,Math.round((b-a)/864e5))||7; })();
   return (
