@@ -4,6 +4,7 @@
 const http = require("http");
 const { optimizeTrip, genDates } = require("./orchestrator");
 const { cashToCAD, offersToCAD } = require("./fx");
+const { yearScan } = require("./yearScan");
 const { cheapestFunding, aviosEstimate } = require("./transferGraph");
 const { Cache, wrap, TTL } = require("./cache");
 const { search } = require("./seatsAeroClient");
@@ -111,6 +112,23 @@ const server = http.createServer((req, res) => {
         send(res, 200, result);
       } catch (e) {
         console.error("OPTIMIZE ERROR:", e.stack || e.message);
+        send(res, 500, { error: e.message });
+      }
+    });
+    return;
+  }
+  // Year view: cheapest all-in month across the next 12 months (2 samples/month).
+  if (req.method === "POST" && req.url === "/year") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", async () => {
+      try {
+        const cfg = JSON.parse(body || "{}");
+        if (!cfg.origin || !cfg.destination) throw new Error("missing origin/destination");
+        const result = await yearScan(cfg, deps);
+        send(res, 200, result);
+      } catch (e) {
+        console.error("YEAR ERROR:", e.stack || e.message);
         send(res, 500, { error: e.message });
       }
     });
