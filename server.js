@@ -15,6 +15,7 @@ const { cashBaseline, searchOffers } = require(
 );
 
 const cache = new Cache();
+const YEAR_TTL_MS = Number(process.env.YEAR_TTL_MS) || 3 * 24 * 3600e3; // seasonal shape; 3 days default
 
 // Cache-wrapped real data sources, unwrapped to the shape the orchestrator expects,
 // with cache age stapled on so the UI can show freshness.
@@ -125,8 +126,22 @@ const server = http.createServer((req, res) => {
       try {
         const cfg = JSON.parse(body || "{}");
         if (!cfg.origin || !cfg.destination) throw new Error("missing origin/destination");
+        // Cache key: everything that changes the numbers. Balances/valuations only matter
+        // when NOT cash-only, so fold a compact signature in for the points path.
+        const o = String(cfg.origin).split(",")[0], d = String(cfg.destination).split(",")[0];
+        const party = `${cfg.party?.adults ?? 1}-${cfg.party?.children ?? 0}`;
+        const balSig = cfg.cashOnly ? "cash"
+          : Object.entries({ ...(cfg.balances||{}), ...Object.fromEntries(Object.entries(cfg.valuations||{}).map(([k,v])=>["v:"+k,v])) })
+              .sort().map(([k,v])=>`${k}=${v}`).join(",");
+        const key = `year:${o}:${d}:${cfg.cabin||"economy"}:${cfg.tripLenDays||7}:${party}:${balSig}`;
+        if (!cfg.fresh) {
+          const c = cache.get(key);
+          if (c.hit) return send(res, 200, { ...c.value, cached: true, ageMs: c.ageMs, ttlMs: YEAR_TTL_MS });
+        }
         const result = await yearScan(cfg, deps);
-        send(res, 200, result);
+        // Only cache a scan worth reusing — needs real priced months and no time-budget truncation.
+        if (result.months.some(m => m.bestEcon > 0) && !result.budgetHit) cache.set(key, result, YEAR_TTL_MS);
+        send(res, 200, { ...result, cached: false, ttlMs: YEAR_TTL_MS });
       } catch (e) {
         console.error("YEAR ERROR:", e.stack || e.message);
         send(res, 500, { error: e.message });

@@ -44,19 +44,24 @@ async function yearScan(cfg, deps, opts = {}) {
   const concurrency = opts.concurrency ?? 3;
   const deadline = Date.now() + budgetMs;
   const tripLen = Math.max(1, cfg.tripLenDays || 7);
+  const cashOnly = !!cfg.cashOnly;
   const samples = sampleDates(tripLen);
 
   const priced = await mapLimit(samples, concurrency, async (s) => {
     if (Date.now() > deadline) return { ...s, skipped: true };
     try {
       const optimize = deps.optimize || defaultOptimize;
+      // Cash-only: no award sources, no balances, and disable the Avios fallback so
+      // bestEcon collapses to the pure cash fare.
       const r = await optimize({
         origin: cfg.origin, destination: cfg.destination,
         target: { depart: s.dep, return: s.ret },
         flexDays: 0, party: cfg.party, cabin: cfg.cabin,
-        sources: cfg.sources || [], balances: cfg.balances || {},
-        valuations: cfg.valuations || {}, awardTax: cfg.awardTax || {},
-        aviosViable: cfg.aviosViable,
+        sources: cashOnly ? [] : (cfg.sources || []),
+        balances: cashOnly ? {} : (cfg.balances || {}),
+        valuations: cashOnly ? {} : (cfg.valuations || {}),
+        awardTax: cfg.awardTax || {},
+        aviosViable: cashOnly ? false : cfg.aviosViable,
       }, deps);
       const g = r.best || (r.grid && r.grid[0]);
       if (!g || !(g.bestEcon > 0)) return { ...s, skipped: true }; // no priced pair this sample
@@ -77,7 +82,8 @@ async function yearScan(cfg, deps, opts = {}) {
     if (!cur || p.bestEcon < cur.bestEcon) byMonth[p.monthKey] = p;
   }
   const months = Object.values(byMonth).sort((a, b) => a.monthKey.localeCompare(b.monthKey));
-  return { months, sampled: priced.length, skipped, budgetHit: Date.now() > deadline };
+  return { months, sampled: priced.length, skipped, budgetHit: Date.now() > deadline,
+    cashOnly, scannedAt: Date.now() };
 }
 
 module.exports = { yearScan, sampleDates };
