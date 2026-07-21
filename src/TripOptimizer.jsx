@@ -264,6 +264,7 @@ export default function TripOptimizer(){
     try{ localStorage.setItem("ts_theme",theme); }catch{}
   },[theme]);
   const [mode,setMode]=useState("cash"); // "cash" = all flights, cash price · "optimize" = points engine
+  const [yearCashOnly,setYearCashOnly]=useState(false);
   // Results live per-tab so switching cash <-> points never discards either side.
   const IDLE={status:"idle", kind:null, data:null, sample:false, err:null};
   const [states,setStates]=useState({flights:IDLE, optimize:IDLE, year:IDLE});
@@ -352,12 +353,13 @@ export default function TripOptimizer(){
     const a=new Date(form.depart), b=new Date(form.return||form.depart);
     return Math.max(1,Math.round((b-a)/864e5))||7;
   };
-  async function runYear(){
+  async function runYear(fresh=false){
     if(state.status==="loading") return;
     setState({status:"loading", kind:"year", data:null, sample:false, err:null});
     const cfg={ origin:String(form.origin).split(",")[0], destination:String(form.destination).split(",")[0],
       party:{adults:Number(form.adults), children:Number(form.children)}, cabin:form.cabin,
-      tripLenDays:tripLenDays(), sources:["aeroplan","flyingblue","american","qatar"],
+      tripLenDays:tripLenDays(), cashOnly:yearCashOnly, fresh,
+      sources:["aeroplan","flyingblue","american","qatar"],
       balances:Object.fromEntries(balances.map(b=>[b.program,Number(b.amount)])),
       valuations:Object.fromEntries(balances.map(b=>[b.program,Number(b.value)])),
       awardTax:{Aeroplan:80,"Flying Blue":90,American:50,"BA Avios":60,Qatar:60} };
@@ -464,10 +466,16 @@ export default function TripOptimizer(){
               </button>
             )}
             {mode==="year" && (
-              <div style={{fontFamily:mono,fontSize:10.5,color:MUTED,marginTop:8,lineHeight:1.5}}>
-                Prices ~2 dates/month across the next year at your current trip length
-                ({tripLenDays()} nights). Uses your balances for all-in comparison.
-              </div>
+              <>
+                <div style={{display:"flex",gap:8,marginTop:10}}>
+                  <Chip active={!yearCashOnly} on={()=>setYearCashOnly(false)}>All-in (cash + points)</Chip>
+                  <Chip active={yearCashOnly} on={()=>setYearCashOnly(true)}>Cash only</Chip>
+                </div>
+                <div style={{fontFamily:mono,fontSize:10.5,color:MUTED,marginTop:8,lineHeight:1.5}}>
+                  Prices ~2 dates/month across the next year at your current trip length
+                  ({tripLenDays()} nights). {yearCashOnly?"Cash fares only.":"Uses your balances for all-in comparison."}
+                </div>
+              </>
             )}
           </Panel>
           {(mode==="optimize"||mode==="year") && (
@@ -521,7 +529,7 @@ export default function TripOptimizer(){
         {mode==="year" && state.err && !state.data && (
           <Banner color={DANGER} bg="var(--err-bg)" bd="var(--err-bd)">{state.err}</Banner>
         )}
-        {mode==="year" && state.data && <YearView r={state.data} form={form} onPickMonth={(dep,ret)=>{
+        {mode==="year" && state.data && <YearView r={state.data} form={form} onRefresh={()=>runYear(true)} onPickMonth={(dep,ret)=>{
           upd("depart",dep); upd("return",ret); setMode("cash"); setTimeout(()=>runCash({dep,ret}),60);
         }}/>}
         <WatchPanel form={form}/>
@@ -956,7 +964,10 @@ function PayWithPoints({o,balances,onAwardCheck}){
 }
 
 // Year view: 12-month all-in price bars, Google-style. Tap a month to drill into its dates.
-function YearView({r,form,onPickMonth}){
+function YearView({r,form,onPickMonth,onRefresh}){
+  const ago=(ms)=>{ if(ms==null) return null; const m=Math.round(ms/60000);
+    if(m<60) return `${m}m ago`; const h=Math.round(m/60); if(h<24) return `${h}h ago`;
+    return `${Math.round(h/24)}d ago`; };
   const months=r.months||[];
   if(!months.length) return (
     <div style={{fontFamily:mono,fontSize:12,color:MUTED,padding:"12px 0"}}>
@@ -984,9 +995,16 @@ function YearView({r,form,onPickMonth}){
         sub:`${cheapest.winner==="award"?"pay with points":cheapest.winner==="mixed"?"points + cash":"pay cash"} · tap to see this month`,
         onGo:()=>onPickMonth(cheapest.dep,cheapest.ret),
       }]}/>
-      <div style={{fontFamily:mono,fontSize:11,letterSpacing:"0.12em",color:MUTED,textTransform:"uppercase",margin:"4px 0 10px"}}>
-        Cheapest all-in per month · {String(form.origin).split(",")[0]} ⇄ {String(form.destination).split(",")[0]} · ~{nights} nights
-        {r.budgetHit?" · (partial — scan hit time limit)":""}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",flexWrap:"wrap",gap:6,margin:"4px 0 10px"}}>
+        <div style={{fontFamily:mono,fontSize:11,letterSpacing:"0.12em",color:MUTED,textTransform:"uppercase"}}>
+          {r.cashOnly?"Cheapest cash":"Cheapest all-in"} per month · {String(form.origin).split(",")[0]} ⇄ {String(form.destination).split(",")[0]} · ~{nights} nights
+          {r.budgetHit?" · (partial — scan hit time limit)":""}
+        </div>
+        <div style={{fontFamily:mono,fontSize:10,color:MUTED,whiteSpace:"nowrap"}}>
+          {r.cached?`scanned ${ago(r.ageMs)} · `:r.scannedAt?"fresh · ":""}
+          {onRefresh&&<button onClick={onRefresh} style={{fontFamily:mono,fontSize:10,color:PRIMARY,
+            background:"none",border:"none",cursor:"pointer",padding:0,textDecoration:"underline"}}>refresh</button>}
+        </div>
       </div>
       <div style={{display:"flex",flexDirection:"column",gap:6}}>
         {months.map(m=>{
