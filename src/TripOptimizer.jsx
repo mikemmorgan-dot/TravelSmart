@@ -1085,16 +1085,21 @@ function YearView({r,form,onPickMonth,onRefresh}){
       <div style={{display:"flex",flexDirection:"column",gap:6}}>
         {months.map(m=>{
           const has=m.bestEcon>0;
-          const frac=has&&hi>lo?(m.bestEcon-lo)/(hi-lo):0;
-          const isLow=has&&m.monthKey===cheapest.monthKey;
+          // Width is zero-anchored: proportional to price, priciest month = 100%.
+          // A 27% price gap now reads as a 27% length gap, not empty-vs-full.
+          const widthPct=has&&hi>0?(m.bestEcon/hi)*100:0;
+          // Colour is a pure function of price: equal price -> equal colour. Any month AT the
+          // minimum price is flagged cheapest (ties included), not just the tiebreak winner.
+          const rel=has&&hi>lo?(m.bestEcon-lo)/(hi-lo):0;
+          const isLow=has&&m.bestEcon===lo;
           return (
             <button key={m.monthKey} onClick={()=>has&&onPickMonth(m.dep,m.ret)} disabled={!has}
               style={{display:"flex",alignItems:"center",gap:10,background:"none",border:"none",
                 cursor:has?"pointer":"default",padding:"2px 0",textAlign:"left",opacity:has?1:0.5}}>
               <span style={{fontFamily:mono,fontSize:12,width:58,color:isLow?BEST:INK,fontWeight:isLow?800:400}}>{mLabel(m.monthKey)}</span>
               <span style={{flex:1,height:22,background:SURFACE,borderRadius:5,overflow:"hidden",position:"relative"}}>
-                {has&&<span style={{position:"absolute",inset:0,width:`${18+frac*82}%`,
-                  background:isLow?BEST:(frac<0.4?POS:frac<0.75?"#d9a441":DANGER),
+                {has&&<span style={{position:"absolute",inset:0,width:`${widthPct}%`,
+                  background:isLow?BEST:(rel<0.4?POS:rel<0.75?"#d9a441":DANGER),
                   opacity:isLow?1:0.55,borderRadius:5,transition:"width 0.3s"}}/>}
               </span>
               <span style={{fontFamily:mono,fontSize:12,fontWeight:700,width:106,textAlign:"right",color:has?(isLow?BEST:INK):MUTED}}>
