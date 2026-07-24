@@ -265,6 +265,7 @@ export default function TripOptimizer(){
   },[theme]);
   const [mode,setMode]=useState("cash"); // "cash" = all flights, cash price · "optimize" = points engine
   const [yearCashOnly,setYearCashOnly]=useState(false);
+  const [tripOpen,setTripOpen]=useState(true);   // collapses to a summary line once results exist
   // Results live per-tab so switching cash <-> points never discards either side.
   const IDLE={status:"idle", kind:null, data:null, sample:false, err:null};
   const [states,setStates]=useState({flights:IDLE, optimize:IDLE, year:IDLE});
@@ -344,6 +345,7 @@ export default function TripOptimizer(){
         _cacheAgeMs:Math.max(...oks.map(r=>r._cacheAgeMs||0)),
         note:oks.length<combos.length?`${combos.length-oks.length} route(s) failed`:oks[0].note };
       setState({status:"done", kind:"flights", data:merged, sample:false, err:null});
+      if(!overrideDates) setTripOpen(false);
     }catch(e){
       if(!overrideDates) setState({status:"done", kind:"flights", data:null, sample:false, err:friendly(e.message)});
     }finally{ setPairLoading(false); }
@@ -440,6 +442,25 @@ export default function TripOptimizer(){
 
         {/* form */}
         <div style={{display:"flex",flexWrap:"wrap",gap:16,margin:"20px 0"}}>
+          {!tripOpen ? (
+            <div style={{flex:1,minWidth:300,background:SURFACE,border:`1px solid ${HAIR}`,borderRadius:8,
+              padding:"12px 14px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <div style={{flex:1,minWidth:180}}>
+                <div style={{fontWeight:800,fontSize:15}}>
+                  {String(form.origin).split(",")[0]} → {String(form.destination).split(",")[0]}
+                </div>
+                <div style={{fontFamily:mono,fontSize:11,color:MUTED,marginTop:2}}>
+                  {dateLabel(form.depart)}{form.return?` \u2013 ${dateLabel(form.return)}`:""} · {form.cabin}
+                  {" \u00b7 "}{Number(form.adults)+Number(form.children)} traveller{Number(form.adults)+Number(form.children)!==1?"s":""}
+                </div>
+              </div>
+              <button onClick={()=>setTripOpen(true)}
+                style={{fontFamily:mono,fontSize:11.5,fontWeight:700,color:PRIMARY,background:"none",
+                  border:`1px solid ${PRIMARY}`,borderRadius:6,padding:"7px 14px",cursor:"pointer"}}>
+                Edit trip
+              </button>
+            </div>
+          ) : (
           <Panel title="Trip">
             <Row><Field label="From"><AirportField v={form.origin} on={v=>upd("origin",v)}/></Field>
               <Field label="To"><AirportField v={form.destination} on={v=>upd("destination",v)}/></Field>
@@ -478,6 +499,7 @@ export default function TripOptimizer(){
               </>
             )}
           </Panel>
+          )}
           {(mode==="optimize"||mode==="year") && (
           <Panel title="Your balances" sub="program · points · ¢/pt">
             {balances.map((b,i)=>{
@@ -752,6 +774,24 @@ function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
   const cap=flt.maxPrice??hi;
   const upd=(patch)=>setFlt(f=>({...f,...patch}));
   const togList=(key,v)=>upd({[key]:flt[key].includes(v)?flt[key].filter(x=>x!==v):[...flt[key],v]});
+  const [open,setOpen]=useState(false);
+  const lbl=(arr,k)=>arr.find(x=>x[0]===k)?.[1]||k;
+  // Only filters hidden behind "More filters" need summary chips — Sort/Stops stay visible.
+  const active=[];
+  if(flt.minLayover!=="any") active.push(["layover "+lbl(MIN_LAYOVERS,flt.minLayover),{minLayover:"any"}]);
+  if(flt.layover!=="any")    active.push(["layover "+lbl(LAYOVERS,flt.layover),{layover:"any"}]);
+  if(flt.hideBasic)          active.push(["no Basic/Light",{hideBasic:false}]);
+  if(flt.needChecked)        active.push(["checked bag",{needChecked:false}]);
+  if(flt.airlines.length)    active.push([`${flt.airlines.length} airline${flt.airlines.length>1?"s":""}`,{airlines:[]}]);
+  if(flt.maxPrice!=null)     active.push(["under "+money(flt.maxPrice,cur),{maxPrice:null}]);
+  if(flt.maxDur!=null)       active.push(["under "+durLabel(flt.maxDur),{maxDur:null}]);
+  if(flt.destAp.length)      active.push(["into "+flt.destAp.join("/"),{destAp:[]}]);
+  if(flt.noUS)               active.push(["no US connections",{noUS:false}]);
+  if(flt.exclAirports.length)active.push([`skip ${flt.exclAirports.join("/")}`,{exclAirports:[]}]);
+  if(flt.outWin.length)      active.push(["out departs",{outWin:[]}]);
+  if(flt.outArr.length)      active.push(["out arrives",{outArr:[]}]);
+  if(flt.retWin.length)      active.push(["return departs",{retWin:[]}]);
+  if(flt.retArr.length)      active.push(["return arrives",{retArr:[]}]);
   const dirty=flt.stops!=="any"||flt.airlines.length||flt.maxPrice!=null||flt.outWin.length||flt.retWin.length||flt.sort!=="price"||flt.layover!=="any"||flt.minLayover!=="any"||flt.hideBasic||flt.needChecked||flt.outArr.length||flt.retArr.length||flt.noUS||flt.exclAirports.length||flt.maxDur!=null||flt.destAp.length;
   return (
     <div style={{background:SURFACE,border:`1px solid ${HAIR}`,borderRadius:10,padding:"12px 14px",marginBottom:14}}>
@@ -762,6 +802,31 @@ function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
         {[["any","Any"],["0","Nonstop"],["1","≤ 1 stop"]].map(([k,l])=>
           <Chip key={k} active={flt.stops===k} on={()=>upd({stops:k})}>{l}</Chip>)}
       </FGroup>
+      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",
+        marginTop:4,paddingTop:8,borderTop:`1px solid ${HAIR}`}}>
+        <button onClick={()=>setOpen(v=>!v)} aria-expanded={open}
+          style={{fontFamily:mono,fontSize:11.5,fontWeight:700,letterSpacing:"0.04em",
+            border:`1px solid ${active.length?PRIMARY:HAIR}`,background:active.length?PRIMARY:SURFACE,
+            color:active.length?"#fff":INK,borderRadius:6,padding:"6px 11px",cursor:"pointer"}}>
+          {open?"Fewer filters \u25b4":`More filters${active.length?` (${active.length})`:""} \u25be`}
+        </button>
+        <span style={{fontFamily:mono,fontSize:11,color:MUTED,marginLeft:"auto"}}>
+          {shownCount} of {offers.length}
+        </span>
+        {dirty && <button onClick={()=>{ setFlt(FLT_DEFAULTS); setOpen(false); }}
+          style={{fontFamily:mono,fontSize:11,color:PRIMARY,background:"none",border:"none",
+            cursor:"pointer",fontWeight:700}}>reset</button>}
+      </div>
+      {!open && active.length>0 && (
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>
+          {active.map(([t,clear],i)=>(
+            <button key={i} onClick={()=>upd(clear)} title={`remove: ${t}`}
+              style={{fontFamily:mono,fontSize:10.5,border:`1px solid ${HAIR}`,background:PAPER,color:MUTED,
+                borderRadius:20,padding:"3px 9px",cursor:"pointer"}}>{t} ×</button>
+          ))}
+        </div>
+      )}
+      {open && <>
       <FGroup label="Layover · shortest / longest">
         {MIN_LAYOVERS.map(([k,l])=><Chip key={"n"+k} active={flt.minLayover===k} on={()=>upd({minLayover:k})}>{l}</Chip>)}
         <span style={{fontFamily:mono,fontSize:11,color:MUTED,padding:"0 2px"}}>·</span>
@@ -819,11 +884,7 @@ function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
           {WINDOWS.map(([k,l])=><Chip key={"ra"+k} active={flt.retArr.includes(k)} on={()=>togList("retArr",k)}>{l}</Chip>)}
         </FGroup>
       )}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:2}}>
-        <span style={{fontFamily:mono,fontSize:11,color:MUTED}}>{shownCount} of {offers.length} shown</span>
-        {dirty && <button onClick={()=>setFlt(FLT_DEFAULTS)} style={{fontFamily:mono,fontSize:11,color:PRIMARY,
-          background:"none",border:"none",cursor:"pointer",fontWeight:700}}>reset filters</button>}
-      </div>
+      </>}
     </div>
   );
 }
@@ -1146,11 +1207,24 @@ function FlightList({r,form,balances,onPickPair,pairLoading,onAwardCheck}){
           )}
         </div>
       )}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",flexWrap:"wrap",gap:8,margin:"4px 0 12px"}}>
-        <h2 style={{fontSize:12,fontFamily:mono,letterSpacing:"0.14em",textTransform:"uppercase",color:MUTED,margin:0}}>
-          {offers.length} option{offers.length!==1?"s":""} · {form.origin} ⇄ {form.destination}{r._pair?` · ${r._pair.dep} → ${r._pair.ret}`:""} · total for {pax} traveller{pax>1?"s":""}
-        </h2>
-        <span style={{fontFamily:mono,fontSize:10,color:MUTED}}>{age} · {r.currency}{r.fx&&` · from ${r.fx.from} @ ${r.fx.rate}${r.fx.approx?" (approx — BoC unavailable)":` (BoC ${r.fx.asOf})`}`}</span>
+      {/* Sticky context: what you're looking at stays visible through a long scroll,
+          and the currency is stated where the prices are rather than far above them. */}
+      <div style={{position:"sticky",top:0,zIndex:5,background:PAPER,
+        borderBottom:`1px solid ${HAIR}`,padding:"8px 0 7px",margin:"0 0 12px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10,flexWrap:"wrap"}}>
+          <span style={{fontWeight:800,fontSize:14,letterSpacing:"-0.01em"}}>
+            {String(form.origin).split(",")[0]} ⇄ {String(form.destination).split(",")[0]}
+            <span style={{fontFamily:mono,fontSize:11,fontWeight:400,color:MUTED,marginLeft:8}}>
+              {dateLabel(r._pair?.dep||form.depart)}{(r._pair?.ret||form.return)?` \u2013 ${dateLabel(r._pair?.ret||form.return)}`:""}
+            </span>
+          </span>
+          <span style={{fontFamily:mono,fontSize:11,color:MUTED}}>
+            <b style={{color:INK}}>{offers.length}</b> flight{offers.length!==1?"s":""} · <b style={{color:INK}}>{r.currency}</b> · {pax} traveller{pax>1?"s":""}
+          </span>
+        </div>
+        <div style={{fontFamily:mono,fontSize:9.5,color:MUTED,marginTop:2}}>
+          {age}{r.fx?` \u00b7 converted from ${r.fx.from} @ ${r.fx.rate}${r.fx.approx?" (approx \u2014 BoC unavailable)":` (BoC ${r.fx.asOf})`}`:""}
+        </div>
       </div>
       {r.grid&&r.grid.length>1&&(
         <CashMatrix grid={r.grid} sel={r._pair} onSel={onPickPair} route={r._gridRoute} loading={pairLoading}/>
