@@ -428,13 +428,14 @@ export default function TripOptimizer(){
         </div>
 
         {/* mode toggle */}
-        <div style={{display:"flex",gap:8,marginTop:18}}>
-          {[["cash","Cash flights"],["optimize","Points optimizer"],["year","Year view"]].map(([k,label])=>(
-            <button key={k} onClick={()=>setMode(k)}
-              style={{fontFamily:mono,fontSize:11,letterSpacing:"0.08em",textTransform:"uppercase",
-                padding:"7px 14px",borderRadius:6,cursor:"pointer",fontWeight:700,
-                border:`1px solid ${mode===k?PRIMARY:HAIR}`,
-                background:mode===k?PRIMARY:SURFACE,color:mode===k?"#fff":MUTED}}>
+        <div role="tablist" style={{display:"flex",marginTop:18,width:"100%",maxWidth:420,
+          background:SURFACE,border:`1px solid ${HAIR}`,borderRadius:8,overflow:"hidden"}}>
+          {[["cash","Cash"],["optimize","Points"],["year","Year"]].map(([k,label],idx)=>(
+            <button key={k} role="tab" aria-selected={mode===k} onClick={()=>setMode(k)}
+              style={{flex:1,fontFamily:mono,fontSize:11.5,letterSpacing:"0.09em",textTransform:"uppercase",
+                padding:"10px 4px",cursor:"pointer",fontWeight:700,whiteSpace:"nowrap",border:"none",
+                borderLeft:idx?`1px solid ${HAIR}`:"none",
+                background:mode===k?PRIMARY:"transparent",color:mode===k?"#fff":MUTED}}>
               {label}
             </button>
           ))}
@@ -609,19 +610,20 @@ function Slice({s,label}){
       <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,textTransform:"uppercase"}}>
         {label}{first.depart?<span style={{color:INK,marginLeft:6}}>{dateLabel(first.depart)}</span>:null}
       </div>
-      <div style={{fontWeight:700,fontSize:15,marginTop:3}}>
+      <div style={{fontWeight:700,fontSize:16,letterSpacing:"-0.01em",marginTop:3}}>
         {hhmm(first.depart)} {first.from} → {hhmm(last.arrive)} {last.to}
         {(()=>{ const d=dayDelta(first.depart,last.arrive);
           return d>0?<sup style={{color:BEST,fontSize:10,fontWeight:800,marginLeft:2}}>+{d}</sup>:null; })()}
       </div>
-      <div style={{fontFamily:mono,fontSize:11.5,color:MUTED,marginTop:2}}>
-        {dur(s.duration)} total · {s.stops===0?"nonstop":`${s.stops} stop${s.stops>1?"s":""}`} · {segs.map(g=>`${g.carrier}${g.number||""}`).join(" · ")}
+      {/* Duration and stops are what you actually compare, so they read first and darker.
+          Flight numbers live in the expanded detail rather than competing here. */}
+      <div style={{fontFamily:mono,fontSize:11.5,marginTop:3}}>
+        <span style={{color:INK,fontWeight:600}}>{dur(s.duration)}</span>
+        <span style={{color:MUTED}}> · {s.stops===0?"nonstop":`${s.stops} stop${s.stops>1?"s":""}`}</span>
+        {lays.length>0 && <span style={{color:MUTED}}>
+          {" · "}{lays.map(l=>`${l.len||"—"} in ${l.at}`).join(" · ")}
+        </span>}
       </div>
-      {lays.length>0 && (
-        <div style={{fontFamily:mono,fontSize:10.5,color:MUTED,marginTop:1}}>
-          {lays.map(l=>`${l.len||"—"} in ${cityOf(l.at)} (${l.at})`).join(" · ")}
-        </div>
-      )}
     </div>
   );
 }
@@ -1256,6 +1258,9 @@ function FlightList({r,form,balances,onPickPair,pairLoading,onAwardCheck}){
                     color:isFav(o)?BEST:MUTED}}>{isFav(o)?"★":"☆"}</button>
                 <span style={{fontWeight:800,fontSize:15}}>{airline(o.validatingAirlines?.[0])}</span>
                 {r._routes?.length>1&&o._route&&<span style={{fontFamily:mono,fontSize:10,fontWeight:700,color:INK,background:PAPER,border:`1px solid ${HAIR}`,borderRadius:3,padding:"1px 5px"}}>{o._route}</span>}
+              </div>
+              {/* Fare attributes sit below the airline so the identity line stays scannable. */}
+              <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap",marginTop:4}}>
                 {o.cabin && <span style={{fontFamily:mono,fontSize:10,color:MUTED}}>{o.cabin.replace("_"," ")}</span>}
                 {o.fareBrand && <span style={{fontFamily:mono,fontSize:10,fontWeight:700,
                   color:o.basic?BEST:MUTED,border:`1px solid ${o.basic?BEST:HAIR}`,
@@ -1276,7 +1281,7 @@ function FlightList({r,form,balances,onPickPair,pairLoading,onAwardCheck}){
             </div>
             <div style={{textAlign:"right",flexShrink:0,marginLeft:"auto"}}>
               <div style={{fontFamily:mono,fontSize:24,fontWeight:800,color:o.price===cheapestShown?POS:INK}}>{money(o.price,r.currency)}</div>
-              <div style={{fontFamily:mono,fontSize:11,color:MUTED,whiteSpace:"nowrap"}}>{money(o.price/pax,r.currency)}/person · taxes {money(o.taxes,r.currency)}</div>
+              <div style={{fontFamily:mono,fontSize:10,color:MUTED,whiteSpace:"nowrap",marginTop:1}}>{money(o.price/pax,r.currency)}/person · taxes {money(o.taxes,r.currency)}</div>
               <div style={{fontFamily:mono,fontSize:9,letterSpacing:"0.08em",color:MUTED,marginTop:4,textTransform:"uppercase"}}>
                 {open===i?"▴ hide details":"▾ details"}
               </div>
