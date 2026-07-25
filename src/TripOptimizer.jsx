@@ -701,6 +701,14 @@ function WatchPanel({form}){
 // ---- Filters for the cash flight list. All client-side: the engine already sent every offer. ----
 const durMin=(d)=>{ const m=(d||"").match(/PT(?:(\d+)H)?(?:(\d+)M)?/); return m?(+m[1]||0)*60+(+m[2]||0):9e9; };
 const totalDur=(o)=>(o.itineraries||[]).reduce((t,s)=>t+durMin(s.duration),0);
+// Wide-body detection from Duffel's aircraft names. Conservative: matches the common
+// twin-aisle families; unknown/absent aircraft are treated as NOT confirmed wide-body.
+const WIDEBODY_RE=/\b(7[45]7|767|777|787|A3(30|40|50|80)|A33|A35|dreamliner|triple seven|jumbo)\b/i;
+const offerAircraft=(o)=>{ const names=[];
+  for(const it of o.itineraries||[]) for(const g of it.segments||[]) if(g.aircraft) names.push(g.aircraft);
+  return names; };
+// "all" = every marketed segment is wide-body (true long-haul comfort, no narrow-body legs).
+const isAllWidebody=(o)=>{ const a=offerAircraft(o); return a.length>0 && a.every(n=>WIDEBODY_RE.test(n)); };
 const depHour=(o,leg)=>{ const iso=o.itineraries?.[leg]?.segments?.[0]?.depart; return iso?+iso.slice(11,13):null; };
 const maxStops=(o)=>Math.max(...(o.itineraries||[{stops:0}]).map(s=>s.stops||0));
 const maxLayoverMin=(o)=>{
@@ -735,7 +743,11 @@ const durLabel=(min)=>`${Math.floor(min/60)}h${min%60?` ${min%60}m`:""}`;
 const destAp=(o)=>{ const segs=o.itineraries?.[0]?.segments; return segs?.[segs.length-1]?.to||null; };
 const WINDOWS=[["early","before 8a",h=>h<8],["morning","8a–12p",h=>h>=8&&h<12],["afternoon","12–6p",h=>h>=12&&h<18],["evening","after 6p",h=>h>=18]];
 const inWindows=(sel,h)=>!sel.length||h==null||sel.some(k=>WINDOWS.find(w=>w[0]===k)[2](h));
-const SORTS=[["price","Cheapest"],["dur","Fastest"],["dep","Earliest out"]];
+const SORTS=[["best","Best"],["price","Cheapest"],["dur","Fastest"],["dep","Earliest out"]];
+// "Best" = cheapest once you price the time cost of a long trip. $25/hour of total travel
+// (both directions): a 13h-longer itinerary must be ~$325 cheaper to still win. Balances
+// price against the real cost of a long haul without letting duration dominate outright.
+const bestScore=(o)=>o.price + (totalDur(o)/60)*25;
 
 function Chip({on,active,children,title}){
   return <button onClick={on} title={title} style={{fontFamily:mono,fontSize:11,padding:"5px 10px",borderRadius:14,
@@ -749,7 +761,7 @@ const FGroup=({label,children})=>(
   </div>
 );
 
-const FLT_DEFAULTS={sort:"price",stops:"any",airlines:[],maxPrice:null,outWin:[],retWin:[],layover:"any",minLayover:"any",hideBasic:false,needChecked:false,outArr:[],retArr:[],noUS:false,exclAirports:[],maxDur:null,destAp:[]};
+const FLT_DEFAULTS={sort:"best",stops:"any",airlines:[],maxPrice:null,outWin:[],retWin:[],layover:"any",minLayover:"any",hideBasic:false,needChecked:false,outArr:[],retArr:[],noUS:false,exclAirports:[],maxDur:null,destAp:[],widebody:false};
 
 function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
   // Airline facets with count + lowest price, cheapest-first so the useful chips lead.
@@ -784,6 +796,7 @@ function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
   if(flt.layover!=="any")    active.push(["layover "+lbl(LAYOVERS,flt.layover),{layover:"any"}]);
   if(flt.hideBasic)          active.push(["no Basic/Light",{hideBasic:false}]);
   if(flt.needChecked)        active.push(["checked bag",{needChecked:false}]);
+  if(flt.widebody)           active.push(["wide-body",{widebody:false}]);
   if(flt.airlines.length)    active.push([`${flt.airlines.length} airline${flt.airlines.length>1?"s":""}`,{airlines:[]}]);
   if(flt.maxPrice!=null)     active.push(["under "+money(flt.maxPrice,cur),{maxPrice:null}]);
   if(flt.maxDur!=null)       active.push(["under "+durLabel(flt.maxDur),{maxDur:null}]);
@@ -794,7 +807,7 @@ function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
   if(flt.outArr.length)      active.push(["out arrives",{outArr:[]}]);
   if(flt.retWin.length)      active.push(["return departs",{retWin:[]}]);
   if(flt.retArr.length)      active.push(["return arrives",{retArr:[]}]);
-  const dirty=flt.stops!=="any"||flt.airlines.length||flt.maxPrice!=null||flt.outWin.length||flt.retWin.length||flt.sort!=="price"||flt.layover!=="any"||flt.minLayover!=="any"||flt.hideBasic||flt.needChecked||flt.outArr.length||flt.retArr.length||flt.noUS||flt.exclAirports.length||flt.maxDur!=null||flt.destAp.length;
+  const dirty=flt.widebody||flt.stops!=="any"||flt.airlines.length||flt.maxPrice!=null||flt.outWin.length||flt.retWin.length||flt.sort!=="best"||flt.layover!=="any"||flt.minLayover!=="any"||flt.hideBasic||flt.needChecked||flt.outArr.length||flt.retArr.length||flt.noUS||flt.exclAirports.length||flt.maxDur!=null||flt.destAp.length;
   return (
     <div style={{background:SURFACE,border:`1px solid ${HAIR}`,borderRadius:10,padding:"12px 14px",marginBottom:14}}>
       <FGroup label="Sort">
@@ -834,9 +847,10 @@ function FilterBar({offers,flt,setFlt,shownCount,hasReturn,cur}){
         <span style={{fontFamily:mono,fontSize:11,color:MUTED,padding:"0 2px"}}>·</span>
         {LAYOVERS.map(([k,l])=><Chip key={"x"+k} active={flt.layover===k} on={()=>upd({layover:k})}>{l}</Chip>)}
       </FGroup>
-      <FGroup label="Fare">
+      <FGroup label="Fare & aircraft">
         <Chip active={flt.hideBasic} on={()=>upd({hideBasic:!flt.hideBasic})}>Hide Basic/Light</Chip>
         <Chip active={flt.needChecked} on={()=>upd({needChecked:!flt.needChecked})}>Checked bag incl.</Chip>
+        <Chip active={flt.widebody} on={()=>upd({widebody:!flt.widebody})}>Wide-body only</Chip>
       </FGroup>
       <FGroup label="Airline · from">
         {byAir.map(a=><Chip key={a.code} active={flt.airlines.includes(a.code)} on={()=>togList("airlines",a.code)}
@@ -1163,7 +1177,13 @@ function FlightList({r,form,balances,onPickPair,pairLoading,onAwardCheck}){
   const pax=(Number(form.adults)||0)+(Number(form.children)||0)||1;
   const age=r._cacheAgeMs>60000?`cached ${Math.round(r._cacheAgeMs/60000)} min ago`:"live";
   const [open,setOpen]=useState(null); // index (into shown) of expanded card
-  const [flt,setFltRaw]=useState(FLT_DEFAULTS);
+  const [flt,setFltRaw]=useState(()=>{
+    try{ const saved=JSON.parse(localStorage.getItem("ts_filters_v1"));
+      // Merge onto defaults so new filter keys added in future builds don't come back undefined.
+      return saved&&typeof saved==="object" ? {...FLT_DEFAULTS,...saved} : FLT_DEFAULTS;
+    }catch{ return FLT_DEFAULTS; }
+  });
+  useEffect(()=>{ try{ localStorage.setItem("ts_filters_v1",JSON.stringify(flt)); }catch{} },[flt]);
   const setFlt=(v)=>{ setOpen(null); setFltRaw(v); }; // indices shift when filters change
   const toggle=(i)=>setOpen(o=>o===i?null:i);
 
@@ -1183,10 +1203,12 @@ function FlightList({r,form,balances,onPickPair,pairLoading,onAwardCheck}){
       (!flt.noUS||!hasUSConnection(o)) &&
       (!flt.exclAirports.length||!connAirports(o).some(c=>flt.exclAirports.includes(c))) &&
       (flt.maxDur==null||totalDur(o)<=flt.maxDur) &&
-      (!flt.destAp.length||flt.destAp.includes(destAp(o)))
+      (!flt.destAp.length||flt.destAp.includes(destAp(o))) &&
+      (!flt.widebody||isAllWidebody(o))
     );
     if(flt.sort==="dur") s=[...s].sort((a,b)=>totalDur(a)-totalDur(b));
     else if(flt.sort==="dep") s=[...s].sort((a,b)=>(depHour(a,0)??99)-(depHour(b,0)??99)||a.price-b.price);
+    else if(flt.sort==="best") s=[...s].sort((a,b)=>bestScore(a)-bestScore(b));
     else s=[...s].sort((a,b)=>a.price-b.price);
     return s;
   },[offers,flt]);
