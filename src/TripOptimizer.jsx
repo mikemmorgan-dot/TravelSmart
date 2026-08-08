@@ -312,6 +312,7 @@ export default function TripOptimizer(){
   const runToken=useRef(0);
   const refreshTries=useRef(0);
   const pendingAward=useRef(false);
+
   useEffect(()=>{ if(mode==="optimize"&&pendingAward.current){ pendingAward.current=false; run(); } },[mode]);
 
   const [pairLoading,setPairLoading]=useState(false);
@@ -355,12 +356,13 @@ export default function TripOptimizer(){
     const a=new Date(form.depart), b=new Date(form.return||form.depart);
     return Math.max(1,Math.round((b-a)/864e5))||7;
   };
-  async function runYear(fresh=false){
+  async function runYear(fresh=false, cashOnlyOverride){
     if(state.status==="loading") return;
+    const cashOnly = cashOnlyOverride===undefined ? yearCashOnly : cashOnlyOverride;
     setState({status:"loading", kind:"year", data:null, sample:false, err:null});
     const cfg={ origin:String(form.origin).split(",")[0], destination:String(form.destination).split(",")[0],
       party:{adults:Number(form.adults), children:Number(form.children)}, cabin:form.cabin,
-      tripLenDays:tripLenDays(), cashOnly:yearCashOnly, fresh,
+      tripLenDays:tripLenDays(), cashOnly, fresh,
       sources:["aeroplan","flyingblue","american","qatar"],
       balances:Object.fromEntries(balances.map(b=>[b.program,Number(b.amount)])),
       valuations:Object.fromEntries(balances.map(b=>[b.program,Number(b.value)])),
@@ -489,10 +491,6 @@ export default function TripOptimizer(){
             )}
             {mode==="year" && (
               <>
-                <div style={{display:"flex",gap:8,marginTop:10}}>
-                  <Chip active={!yearCashOnly} on={()=>setYearCashOnly(false)}>All-in (cash + points)</Chip>
-                  <Chip active={yearCashOnly} on={()=>setYearCashOnly(true)}>Cash only</Chip>
-                </div>
                 <div style={{fontFamily:mono,fontSize:10.5,color:MUTED,marginTop:8,lineHeight:1.5}}>
                   Prices ~2 dates/month across the next year at your current trip length
                   ({tripLenDays()} nights). {yearCashOnly?"Cash fares only.":"Uses your balances for all-in comparison."}
@@ -552,7 +550,9 @@ export default function TripOptimizer(){
         {mode==="year" && state.err && !state.data && (
           <Banner color={DANGER} bg="var(--err-bg)" bd="var(--err-bd)">{state.err}</Banner>
         )}
-        {mode==="year" && state.data && <YearView r={state.data} form={form} onRefresh={()=>runYear(true)} onPickMonth={(dep,ret)=>{
+        {mode==="year" && state.data && <YearView r={state.data} form={form} onRefresh={()=>runYear(true)}
+          cashOnly={yearCashOnly} onCashOnly={(v)=>{ setYearCashOnly(v); runYear(false,v); }}
+          onPickMonth={(dep,ret)=>{
           upd("depart",dep); upd("return",ret); setMode("cash"); setTimeout(()=>runCash({dep,ret}),60);
         }}/>}
         <WatchPanel form={form}/>
@@ -1054,7 +1054,7 @@ function PayWithPoints({o,balances,onAwardCheck}){
 }
 
 // Year view: 12-month all-in price bars, Google-style. Tap a month to drill into its dates.
-function YearView({r,form,onPickMonth,onRefresh}){
+function YearView({r,form,onPickMonth,onRefresh,cashOnly,onCashOnly}){
   const ago=(ms)=>{ if(ms==null) return null; const m=Math.round(ms/60000);
     if(m<60) return `${m}m ago`; const h=Math.round(m/60); if(h<24) return `${h}h ago`;
     return `${Math.round(h/24)}d ago`; };
@@ -1085,6 +1085,12 @@ function YearView({r,form,onPickMonth,onRefresh}){
         sub:`${cheapest.winner==="award"?"pay with points":cheapest.winner==="mixed"?"points + cash":"pay cash"} · tap to see this month`,
         onGo:()=>onPickMonth(cheapest.dep,cheapest.ret),
       }]}/>
+      {onCashOnly && (
+        <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+          <Chip active={!cashOnly} on={()=>onCashOnly(false)}>All-in (cash + points)</Chip>
+          <Chip active={cashOnly} on={()=>onCashOnly(true)}>Cash only</Chip>
+        </div>
+      )}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",flexWrap:"wrap",gap:6,margin:"4px 0 10px"}}>
         <div style={{fontFamily:mono,fontSize:11,letterSpacing:"0.12em",color:MUTED,textTransform:"uppercase"}}>
           {r.cashOnly?"Cheapest cash":"Cheapest all-in"} per month · {String(form.origin).split(",")[0]} ⇄ {String(form.destination).split(",")[0]} · ~{nights} nights
